@@ -165,6 +165,33 @@ class ChangeActivities:
             raise ValueError(f"change {change_id} not found")
         return change
 
+    async def _persist_backup_manifest(
+        self, change_id: str, ticket: str, backups: dict[str, int]
+    ) -> None:
+        """Persist AWX backup job references in the Change JSON before apply."""
+        async with self._sessions() as session:
+            change = await self._load(session, change_id)
+            intent = dict(change.intent or {})
+            intent["_vireonet_backup_manifest"] = {
+                "ticket_number": ticket,
+                "backups": {device: int(job_id) for device, job_id in backups.items()},
+            }
+            change.intent = intent
+            await session.commit()
+
+    async def _load_backup_manifest(self, change_id: str) -> dict[str, int]:
+        """Read rollback references from PostgreSQL, never worker memory."""
+        async with self._sessions() as session:
+            change = await self._load(session, change_id)
+            manifest = (change.intent or {}).get("_vireonet_backup_manifest", {})
+            raw = manifest.get("backups", {}) if isinstance(manifest, dict) else {}
+            if not isinstance(raw, dict):
+                raise ValueError(f"invalid persisted backup manifest for change {change_id}")
+            return {str(device): int(job_id) for device, job_id in raw.items()}
+
+    async def _renew_change_locks(self, intent: Any) -> bool:
+        return await self._locks.renew_all(list(intent.devices), intent.ticket_number)
+
     async def _run_step(self, req: StepRequest) -> dict[str, Any]:
         """Run one engine step. Return shape matches the old _launch_and_poll:
         {job_id, status, ok} plus duration_seconds and evidence."""
@@ -253,7 +280,16 @@ class ChangeActivities:
                     "evidence": {"backups": backups},
                 }
             backups[device] = int(res["job_id"])
-        self._backups[intent.ticket_number] = backups
+        try:
+            await self._persist_backup_manifest(inp.change_id, intent.ticket_number, backups)
+        except Exception as exc:  # noqa: BLE001 — rollback evidence must survive worker restart
+            await self._locks.release_all(list(intent.devices), intent.ticket_number)
+            return {
+                "ok": False,
+                "failures": [f"could not persist backup manifest: {exc}"],
+                "evidence": {"backups": backups},
+            }
+        self._backups[intent.ticket_number] = backups  # compatibility cache only
         # 3. Baseline via AWX pre-check playbook (neighbours, interfaces, config hash).
         baseline_res = await self._run_step(
             self._step_request(intent, ",".join(intent.devices), "pre_check")
@@ -300,7 +336,13 @@ class ChangeActivities:
     @activity.defn(name="post_check_change")
     async def post_check_change(self, inp: CheckInput) -> dict[str, Any]:
         intent = parse_intent(inp.intent)
-        backups = self._backups.get(intent.ticket_number, {})
+        backups = await self._load_backup_manifest(inp.change_id)
+        if not await self._renew_change_locks(intent):
+            return {
+                "ok": False,
+                "failures": ["device lock lease was lost before post-check"],
+                "evidence": {"backup_devices": sorted(backups)},
+            }
         ctx = CheckContext(
             intent=intent,
             ticket_number=intent.ticket_number,
@@ -333,6 +375,19 @@ class ChangeActivities:
     @activity.defn(name="apply_change")
     async def apply_change(self, inp: ApplyInput) -> dict[str, Any]:
         intent = parse_intent(inp.intent)
+        backups = await self._load_backup_manifest(inp.change_id)
+        if set(backups) != set(intent.devices):
+            return {
+                "ok": False,
+                "failures": ["durable backup manifest is missing or incomplete; refusing apply"],
+                "evidence": {"backup_devices": sorted(backups), "requested_devices": sorted(intent.devices)},
+            }
+        if not await self._renew_change_locks(intent):
+            return {
+                "ok": False,
+                "failures": ["device lock lease was lost before apply"],
+                "evidence": {"backup_devices": sorted(backups)},
+            }
         # Dry-run first, for the whole change. A non-empty unexpected diff fails before any device is touched.
         dry = await self._run_step(
             self._step_request(
@@ -352,6 +407,8 @@ class ChangeActivities:
 
         # Apply in waves. Abort threshold stops the rollout; completed waves are rolled back by rollback_change.
         async def apply_wave(wave: list[str]) -> list[str]:
+            if not await self._renew_change_locks(intent):
+                return list(wave)
             res = await self._run_step(
                 self._step_request(
                     intent,
@@ -502,7 +559,20 @@ class ChangeActivities:
     @activity.defn(name="rollback_change")
     async def rollback_change(self, inp: RollbackInput) -> dict[str, Any]:
         intent = parse_intent(inp.intent)
-        backups = self._backups.get(intent.ticket_number, {})
+        try:
+            backups = await self._load_backup_manifest(inp.change_id)
+        except Exception as exc:  # noqa: BLE001 — missing rollback source is an operator incident
+            return {
+                "ok": False,
+                "failures": [f"durable backup manifest unavailable: {exc}"],
+                "evidence": {"trigger": inp.evidence},
+            }
+        if set(backups) != set(intent.devices):
+            return {
+                "ok": False,
+                "failures": ["durable backup manifest is incomplete; rollback cannot be verified"],
+                "evidence": {"backup_devices": sorted(backups), "requested_devices": sorted(intent.devices)},
+            }
         # Rollback restores the pre-change backup per device, via the AWX rollback playbook.
         # The backup job id is the rollback source. Keep the lock and references
         # until AWX confirms success; a failed/unknown rollback needs intervention.
