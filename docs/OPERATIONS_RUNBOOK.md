@@ -40,6 +40,20 @@ Check `/healthz`, `/adapters/health`, `/system/health`, Temporal task-queue
 health and AWX job status. A healthy HTTP endpoint does not prove that network
 execution integrations are healthy.
 
+## Approval and pre-change diff
+
+In real-adapter mode, an approver cannot approve until a per-device diff has
+been persisted. An operator should:
+
+1. Open the validated change and call
+   `POST /changes/{id}/collect-before`.
+2. Review the returned added/removed counts and the detailed change view.
+3. Ask the approver to approve only after the diff has been reviewed.
+4. After approval, VireoNet takes the device lock and captures the running
+   configuration again. If its version differs from the approved diff baseline,
+   pre-check fails and the apply is blocked. Create a new change/diff after
+   investigating the unexpected drift; do not bypass this guard.
+
 ## Change execution failure
 
 - Do not release device locks manually while an AWX job may still be running.
