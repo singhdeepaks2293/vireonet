@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { getAccessToken } from "./token-store";
 import type {
   AdapterHealth,
   AdapterSettingResponse,
@@ -30,7 +31,7 @@ export class ApiError extends Error {
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const token = localStorage.getItem("vireonet-token") ?? TOKEN;
+  const token = getAccessToken() ?? TOKEN;
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!res.ok) {
