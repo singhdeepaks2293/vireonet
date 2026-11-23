@@ -57,8 +57,9 @@ Changes are isolated on `product-hardening/phases-1-4`; `main` is unchanged.
       transition legality.
 
 **Still open**
-- [ ] Integrate real pre-change/candidate diff capture into the approval
-      workflow and re-collect under lock before apply to detect stale baselines.
+- [x] Expose real pre-change/candidate diff capture; real-mode approval is
+      blocked until every device has a persisted diff, and the worker
+      re-collects under lock before apply to detect stale baselines.
 - [ ] Resolve custom-script write scopes from the signed/versioned manifest;
       current explicit scopes cover only the two built-in change types.
 - [ ] Implement post-reconciliation device/NetBox verification; current
