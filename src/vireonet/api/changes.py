@@ -344,6 +344,32 @@ async def reconcile_override(
     )
 
 
+@router.post("/changes/{change_id}/retry-close", status_code=200, response_model=ReconcileOverrideResponse)
+async def retry_close(
+    change_id: str,
+    request: Request,
+    service: ChangeService = Depends(get_service),
+    user: Any = Depends(require_role("approver")),
+) -> ReconcileOverrideResponse:
+    """Retry ServiceNow/NetBox closure after an earlier external failure."""
+    try:
+        change = await service.retry_close(
+            change_id, actor=user.username, reason="operator-approved closure retry"
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — preserve closure_pending and surface retry failure
+        raise HTTPException(status_code=502, detail=f"external closure retry failed: {exc}") from exc
+    if change is None:
+        raise HTTPException(status_code=404, detail="change not found")
+    return ReconcileOverrideResponse(
+        id=str(change.id),
+        ticket_number=change.ticket_number,
+        state=str(change.state.value if hasattr(change.state, "value") else change.state),
+        status="closed",
+    )
+
+
 async def signal_rollback(
     change_id: str,
     request: Request,
