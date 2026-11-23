@@ -566,6 +566,12 @@ class ChangeActivities:
     @activity.defn(name="rollback_change")
     async def rollback_change(self, inp: RollbackInput) -> dict[str, Any]:
         intent = parse_intent(inp.intent)
+        if not await self._renew_change_locks(intent):
+            return {
+                "ok": False,
+                "failures": ["device lock lease was lost before rollback"],
+                "evidence": {"trigger": inp.evidence},
+            }
         try:
             backups = await self._load_backup_manifest(inp.change_id)
         except Exception as exc:  # noqa: BLE001 — missing rollback source is an operator incident
