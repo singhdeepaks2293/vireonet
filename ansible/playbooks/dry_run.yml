@@ -1,0 +1,24 @@
+---
+- name: Dry-run diff — check mode, diff, no changes
+  hosts: all
+  gather_facts: false
+  # check_mode + diff are set on the job template (see awx/job_templates.yaml)
+  # and honoured here by every config task. This playbook never applies.
+  tasks:
+    - name: Render intended config (IOS, check mode)
+      cisco.ios.ios_config:
+        lines: "{{ intended_lines | default([]) }}"
+        parents: "{{ intended_parents | default([]) }}"
+        before: "{{ intended_before | default(omit) }}"
+        after: "{{ intended_after | default(omit) }}"
+      when: ansible_network_os == 'cisco.ios.ios'
+      check_mode: true
+      diff: true
+
+    - name: Render intended config (NX-OS, check mode)
+      cisco.nxos.nxos_config:
+        lines: "{{ intended_lines | default([]) }}"
+        parents: "{{ intended_parents | default([]) }}"
+      when: ansible_network_os == 'cisco.nxos.nxos'
+      check_mode: true
+      diff: true

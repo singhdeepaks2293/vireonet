@@ -1,0 +1,43 @@
+# AWX job template definitions. Import with the AWX CLI / API, or create
+# once in the UI with these exact names — the adapter launches by name.
+# Inventory "NetBox" is the NetBox inventory source (M2 export); Project
+# "VireoNet" is the GitLab project containing ansible/.
+job_templates:
+  - name: backup
+    job_type: run
+    inventory: NetBox
+    project: VireoNet
+    playbook: ansible/playbooks/backup.yml
+  - name: pre-check
+    job_type: run
+    inventory: NetBox
+    project: VireoNet
+    playbook: ansible/playbooks/pre_check.yml
+  - name: dry-run
+    job_type: run
+    inventory: NetBox
+    project: VireoNet
+    playbook: ansible/playbooks/dry_run.yml
+    ask_variables_on_launch: true
+  - name: apply
+    job_type: run
+    inventory: NetBox
+    project: VireoNet
+    playbook: ansible/playbooks/apply.yml
+    ask_variables_on_launch: true
+  - name: post-check
+    job_type: run
+    inventory: NetBox
+    project: VireoNet
+    playbook: ansible/playbooks/post_check.yml
+  - name: rollback
+    job_type: run
+    inventory: NetBox
+    project: VireoNet
+    playbook: ansible/playbooks/rollback.yml
+    ask_variables_on_launch: true
+  - name: ztp-day1
+    job_type: run
+    inventory: NetBox
+    project: VireoNet
+    playbook: ansible/playbooks/ztp_day1.yml

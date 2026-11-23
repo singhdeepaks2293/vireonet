@@ -1,0 +1,27 @@
+---
+- name: Roll back from pre-change backup
+  hosts: all
+  gather_facts: false
+  vars:
+    backup_dir: "/var/lib/awx/backups/{{ ticket | default('unknown') }}"
+  tasks:
+    - name: Read backup file (controller)
+      ansible.builtin.slurp:
+        src: "{{ backup_dir }}/{{ inventory_hostname }}.cfg"
+      delegate_to: localhost
+      register: backup
+      changed_when: false
+
+    - name: Restore running config (IOS)
+      cisco.ios.ios_config:
+        src: "{{ backup_dir }}/{{ inventory_hostname }}.cfg"
+        replace: config
+        save_when: modified
+      when: ansible_network_os == 'cisco.ios.ios'
+
+    - name: Restore running config (NX-OS)
+      cisco.nxos.nxos_config:
+        src: "{{ backup_dir }}/{{ inventory_hostname }}.cfg"
+        replace: config
+        save_when: modified
+      when: ansible_network_os == 'cisco.nxos.nxos'

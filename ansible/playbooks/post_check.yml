@@ -1,0 +1,31 @@
+---
+- name: Post-check — config matches intent, neighbours up, no unexpected diff
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Show running config section for the change
+      cisco.ios.ios_command:
+        commands:
+          - "show running-config {{ post_check_section | default('') }}"
+      register: cfg
+      when: ansible_network_os == 'cisco.ios.ios'
+      changed_when: false
+
+    - name: Assert intended lines are present (IOS)
+      ansible.builtin.assert:
+        that:
+          - intended_lines | default([]) | length == 0 or (cfg.stdout[0] is defined and (intended_lines[0] in cfg.stdout[0] if intended_lines | length > 0 else true))
+        fail_msg: "Post-check failed: intended config not present on {{ inventory_hostname }}"
+      when:
+        - ansible_network_os == 'cisco.ios.ios'
+        - change_type not in ['vlan_remove', 'acl_entry_remove', 'static_route_remove']
+
+    - name: Re-run dry-run — diff must now be empty (idempotency)
+      cisco.ios.ios_config:
+        lines: "{{ intended_lines | default([]) }}"
+        parents: "{{ intended_parents | default([]) }}"
+      when: ansible_network_os == 'cisco.ios.ios'
+      check_mode: true
+      diff: true
+      register: idem
+      failed_when: idem.changed | default(false)

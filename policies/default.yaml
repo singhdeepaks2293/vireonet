@@ -1,0 +1,13 @@
+# Policy is data, not code. Deny if ANY rule matches.
+max_devices_per_change: 10
+protected_devices: ["core-01", "core-02", "fw-01"]
+protected_vlans: [1, 1002, 1003, 1004, 1005]
+uplink_interfaces: ["GigabitEthernet0/0", "Ethernet1/1", "mgmt0"]
+change_window:
+  days: ["Mon", "Tue", "Wed", "Thu", "Fri"]
+  start: "01:00"
+  end: "05:00"
+  timezone: "UTC"
+  # emergency=true in the webhook payload bypasses the window only, nothing else.
+deny_delete_on_uplink: true
+deny_vlan_remove_if_in_use: true

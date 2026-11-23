@@ -1,0 +1,53 @@
+stages: [lint, test, render, batfish, eveng]
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+lint:
+  stage: lint
+  image: python:3.12-slim
+  script:
+    - pip install -e ".[dev]"
+    - ruff check src tests scripts
+    - ruff format --check src tests scripts
+    - mypy src
+
+test:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - pip install -e ".[dev]"
+    - pytest -q -k "not test_temporal_workflow"
+
+render:
+  stage: render
+  image: python:3.12-slim
+  script:
+    - pip install -e ".[dev]"
+    - python scripts/render_intent.py examples/intent-vlan-100.yaml --out rendered/
+  artifacts:
+    paths: [rendered/]
+    expire_in: 1 week
+
+batfish:
+  stage: batfish
+  image: python:3.12-slim
+  variables:
+    VIREONET_BATFISH_HOST: "$BATFISH_HOST"
+  script:
+    - pip install -e ".[dev]"
+    - python scripts/batfish_gate.py --candidate rendered/ --current configs/current/ --out batfish-report.json
+  artifacts:
+    paths: [batfish-report.json]
+    expire_in: 1 week
+  # The gate must fail the pipeline when Batfish fails. No allow_failure here.
+
+eveng:
+  stage: eveng
+  image: python:3.12-slim
+  when: manual
+  rules:
+    - if: '$RUN_EVENG == "true"'
+  script:
+    - pip install -e ".[dev]"
+    - python scripts/eveng_smoke.py --topology topologies/two-leaf.unl --lab "ci-$CI_MERGE_REQUEST_IID"

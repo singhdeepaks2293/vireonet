@@ -1,0 +1,12 @@
+! Day-0 bootstrap — IOS-XE PnP (DHCP option 43 + option 67)
+hostname {{ hostname }}
+pnp profile default
+ transport https {{ pnp_server_url }}
+!
+interface {{ mgmt_interface | default('GigabitEthernet0/0') }}
+ ip address dhcp
+ no shutdown
+ip name-server {{ dns_server | default('8.8.8.8') }}
+! DHCP option 43 (PnP): {{ option_43 }}
+! DHCP option 67 (bootfile): {{ config_file }}
+end

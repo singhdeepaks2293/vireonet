@@ -1,0 +1,48 @@
+---
+- name: Apply change — merge for adds, explicit removal for deletes
+  hosts: all
+  gather_facts: false
+  tasks:
+    # Add: ios_config / nxos_config merge by default (idempotent).
+    - name: Apply intended config (IOS, merge)
+      cisco.ios.ios_config:
+        lines: "{{ intended_lines | default([]) }}"
+        parents: "{{ intended_parents | default([]) }}"
+        before: "{{ intended_before | default(omit) }}"
+        after: "{{ intended_after | default(omit) }}"
+        save_when: modified
+      when:
+        - ansible_network_os == 'cisco.ios.ios'
+        - change_type not in ['vlan_remove', 'acl_entry_remove', 'static_route_remove']
+      diff: true
+
+    - name: Apply intended config (NX-OS, merge)
+      cisco.nxos.nxos_config:
+        lines: "{{ intended_lines | default([]) }}"
+        parents: "{{ intended_parents | default([]) }}"
+        save_when: modified
+      when:
+        - ansible_network_os == 'cisco.nxos.nxos'
+        - change_type not in ['vlan_remove', 'acl_entry_remove', 'static_route_remove']
+      diff: true
+
+    # Delete: explicit `no` lines — never rely on merge to remove config.
+    - name: Remove config (IOS, explicit no)
+      cisco.ios.ios_config:
+        lines: "{{ removal_lines | default([]) }}"
+        parents: "{{ intended_parents | default([]) }}"
+        save_when: modified
+      when:
+        - ansible_network_os == 'cisco.ios.ios'
+        - change_type in ['vlan_remove', 'acl_entry_remove', 'static_route_remove']
+      diff: true
+
+    - name: Remove config (NX-OS, explicit no)
+      cisco.nxos.nxos_config:
+        lines: "{{ removal_lines | default([]) }}"
+        parents: "{{ intended_parents | default([]) }}"
+        save_when: modified
+      when:
+        - ansible_network_os == 'cisco.nxos.nxos'
+        - change_type in ['vlan_remove', 'acl_entry_remove', 'static_route_remove']
+      diff: true

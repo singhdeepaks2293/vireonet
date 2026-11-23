@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: vireonet
+      POSTGRES_PASSWORD: vireonet
+      POSTGRES_DB: vireonet
+    ports: ["5432:5432"]
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vireonet"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  temporal:
+    image: temporalio/auto-setup:1.26.0
+    environment:
+      DB: postgresql
+      DB_PORT: "5432"
+      POSTGRES_USER: vireonet
+      POSTGRES_PWD: vireonet
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    ports: ["7233:7233"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "namespace", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  temporal-ui:
+    image: temporalio/ui:2.31.0
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports: ["8233:8080"]
+    depends_on: [temporal]
+
+  api:
+    build: .
+    environment:
+      VIREONET_DATABASE_URL: postgresql+asyncpg://vireonet:vireonet@postgres:5432/vireonet
+      VIREONET_TEMPORAL_ADDRESS: temporal:7233
+      VIREONET_ADAPTER_MODE: fake
+      VIREONET_LOG_LEVEL: INFO
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      temporal: { condition: service_healthy }
+    command: ["sh", "-c", "alembic upgrade head && uvicorn vireonet.main:app --host 0.0.0.0 --port 8000"]
+
+  worker:
+    build: .
+    environment:
+      VIREONET_DATABASE_URL: postgresql+asyncpg://vireonet:vireonet@postgres:5432/vireonet
+      VIREONET_TEMPORAL_ADDRESS: temporal:7233
+      VIREONET_ADAPTER_MODE: fake
+      VIREONET_LOG_LEVEL: INFO
+    depends_on:
+      postgres: { condition: service_healthy }
+      temporal: { condition: service_healthy }
+    command: ["sh", "-c", "alembic upgrade head && python -m vireonet.worker"]
+
+volumes:
+  postgres-data:

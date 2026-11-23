@@ -1,0 +1,44 @@
+---
+- name: Pre-check — reachability, neighbours, interface state, baseline
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Ping device (reachability)
+      ansible.builtin.command: ping -c 3 -W 2 {{ ansible_host }}
+      delegate_to: localhost
+      changed_when: false
+      register: ping_out
+      failed_when: ping_out.rc != 0
+
+    - name: Show CDP neighbours (IOS)
+      cisco.ios.ios_command:
+        commands:
+          - show cdp neighbors detail
+      register: cdp
+      when: ansible_network_os == 'cisco.ios.ios'
+      changed_when: false
+      failed_when: false
+
+    - name: Show LLDP neighbours (NX-OS)
+      cisco.nxos.nxos_command:
+        commands:
+          - show lldp neighbors detail
+      register: cdp
+      when: ansible_network_os == 'cisco.nxos.nxos'
+      changed_when: false
+      failed_when: false
+
+    - name: Show interfaces status
+      cisco.ios.ios_command:
+        commands:
+          - show interfaces status
+      register: ifstatus
+      when: ansible_network_os == 'cisco.ios.ios'
+      changed_when: false
+
+    - name: Record baseline
+      ansible.builtin.set_fact:
+        vireonet_baseline:
+          cdp: "{{ cdp.stdout[0] | default('') }}"
+          interfaces: "{{ ifstatus.stdout[0] | default('') }}"
+      changed_when: false

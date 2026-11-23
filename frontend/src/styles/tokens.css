@@ -1,0 +1,64 @@
+/* Design tokens. Every component uses these via Tailwind, never a hardcoded colour or size.
+   Light and dark are the same tokens with different values. No gradients, no shadows. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-bg: #f4f4f5;
+  --color-surface: #ffffff;
+  --color-surface-muted: #ececee;
+  --color-border: #d4d4d8;
+  --color-text: #18181b;
+  --color-text-muted: #52525b;
+  --color-accent: #1a5fb4;
+  --color-accent-foreground: #ffffff;
+  --color-success: #1e7a34;
+  --color-success-bg: #e6f4ea;
+  --color-warning: #8a6100;
+  --color-warning-bg: #fef3c7;
+  --color-danger: #b42318;
+  --color-danger-bg: #fef3f2;
+  --color-info: #1a5fb4;
+  --color-info-bg: #e8f0fe;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+
+[data-theme="dark"] {
+  --color-bg: #121214;
+  --color-surface: #1c1c1f;
+  --color-surface-muted: #262629;
+  --color-border: #3f3f46;
+  --color-text: #f4f4f5;
+  --color-text-muted: #a1a1aa;
+  --color-accent: #6ea8fe;
+  --color-accent-foreground: #0b1220;
+  --color-success: #4ade80;
+  --color-success-bg: #12291a;
+  --color-warning: #fbbf24;
+  --color-warning-bg: #2e2305;
+  --color-danger: #fca5a5;
+  --color-danger-bg: #2e1210;
+  --color-info: #6ea8fe;
+  --color-info-bg: #12233d;
+}
+
+html { font-size: 14px; }
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+}
+a { color: var(--color-accent); }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+table { border-collapse: collapse; width: 100%; }
+th, td { border-bottom: 1px solid var(--color-border); text-align: left; padding: 8px; }
+thead th { position: sticky; top: 0; background: var(--color-surface); font-size: 13px; color: var(--color-text-muted); }
+code, .mono { font-family: var(--font-mono); font-size: 13px; }

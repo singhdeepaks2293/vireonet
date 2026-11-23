@@ -1,0 +1,26 @@
+---
+- name: ZTP day-1 — full config from NetBox + templates
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Render day-1 config from template (controller)
+      ansible.builtin.template:
+        src: "templates/day1.j2"
+        dest: "/tmp/{{ inventory_hostname }}-day1.cfg"
+        mode: "0640"
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Apply day-1 config (IOS)
+      cisco.ios.ios_config:
+        src: "/tmp/{{ inventory_hostname }}-day1.cfg"
+        save_when: modified
+      when: ansible_network_os == 'cisco.ios.ios'
+      diff: true
+
+    - name: Apply day-1 config (NX-OS)
+      cisco.nxos.nxos_config:
+        src: "/tmp/{{ inventory_hostname }}-day1.cfg"
+        save_when: modified
+      when: ansible_network_os == 'cisco.nxos.nxos'
+      diff: true

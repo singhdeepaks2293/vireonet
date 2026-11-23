@@ -1,0 +1,10 @@
+! Day-0 bootstrap — Cisco IOS auto-install (DHCP option 66/67)
+hostname {{ hostname }}
+service config
+boot host tftp://{{ tftp_server }}/{{ config_file }}
+interface {{ mgmt_interface | default('GigabitEthernet0/0') }}
+ ip address dhcp
+ no shutdown
+ip tftp source-interface {{ mgmt_interface | default('GigabitEthernet0/0') }}
+ip name-server {{ dns_server | default('8.8.8.8') }}
+end

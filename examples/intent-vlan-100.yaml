@@ -1,0 +1,8 @@
+change_type: vlan_add
+vlan_id: 100
+vlan_name: web
+devices: [leaf-01, leaf-02]
+interfaces: [GigabitEthernet0/1]
+site: dc1
+ticket_number: RITM0001234
+requested_by: alice

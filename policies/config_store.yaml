@@ -1,0 +1,27 @@
+# Enforced by config_store validation and by CI (grep in .gitlab-ci.yml / Actions).
+separation:
+  templates_repo: netops/templates
+  templates_allow: ["*.j2"]
+  templates_forbid:
+    - "*.yaml"          # vars do not live in the templates repo
+    - "*.yml"
+    - "password"
+    - "secret"
+  vars_repo: netops/vars
+  vars_allow: ["*.yaml", "*.yml"]
+  vars_forbid:
+    - "{{"              # no Jinja logic in vars
+    - "{%"              # no Jinja logic in vars
+  device_repo_pattern: "netops/config-<hostname>"
+  device_repo_allow:
+    - "rendered/*.txt"
+    - "backups/*.txt"
+    - "vars.yaml"
+    - "metadata.yaml"
+  device_repo_forbid:
+    - "*.j2"            # no templates in a device repo
+    - "*.jinja"
+  netbox_export:
+    repo: netops/netbox-export
+    direction: netbox_to_git_only   # read-only audit copy, never a render source
+    editable_in_git: false

@@ -1,0 +1,19 @@
+name: VireoNet CI
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+jobs:
+  lint-test-render-batfish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests && ruff format --check src tests
+      - run: mypy --strict src/vireonet
+      - run: pytest -q
+      - run: python scripts/render_intent.py examples/intent-vlan-100.yaml
+      - run: python scripts/batfish_gate.py --snapshot-dir snapshots/current --candidate-dir snapshots/candidate
