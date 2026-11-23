@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
