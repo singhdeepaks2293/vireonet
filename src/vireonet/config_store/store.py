@@ -156,6 +156,21 @@ class ConfigStore:
             await session.refresh(row)
             return row
 
+    async def baseline_matches(
+        self, change_id: uuid.UUID | str, device: str, running_version_id: uuid.UUID
+    ) -> bool:
+        """True only when the stored approval diff references this exact running version."""
+        pk = self._coerce_id(change_id)
+        async with self._sessions() as session:
+            row = (
+                await session.execute(
+                    select(ChangeDiff).where(
+                        ChangeDiff.change_id == pk, ChangeDiff.device == device
+                    )
+                )
+            ).scalar_one_or_none()
+            return row is not None and row.running_version_id == running_version_id
+
     async def diffs_for_change(self, change_id: uuid.UUID | str) -> list[ChangeDiff]:
         pk = self._coerce_id(change_id)
         async with self._sessions() as session:
