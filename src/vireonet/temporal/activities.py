@@ -474,14 +474,23 @@ class ChangeActivities:
                 await self._netbox.add_journal_entry(
                     name, "change", f"Change {intent.ticket_number} applied."
                 )
-            except Exception as exc:  # noqa: BLE001 — recorded, not fatal to close
+            except Exception as exc:  # noqa: BLE001 — external state must be confirmed
                 evidence[f"{name}_netbox_error"] = str(exc)
         try:
             await self._snow.close(
                 intent.ticket_number, f"Change {intent.ticket_number} applied and post-checked."
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — do not claim closure while ITSM is open
             evidence["servicenow_error"] = str(exc)
+        if evidence:
+            # Retain the lock and backup evidence for an operator/retry path.
+            # A partial external close is an uncertain outcome, not success.
+            return {
+                "ok": False,
+                "status": "closure_pending",
+                "failures": ["NetBox and/or ServiceNow closure could not be confirmed"],
+                "evidence": evidence,
+            }
         await self._unsilence_monitoring(intent.ticket_number)
         if self._notifications:
             await self._notifications.change_completed(intent.ticket_number)
@@ -495,7 +504,8 @@ class ChangeActivities:
         intent = parse_intent(inp.intent)
         backups = self._backups.get(intent.ticket_number, {})
         # Rollback restores the pre-change backup per device, via the AWX rollback playbook.
-        # The backup job id is passed as extra_vars so the playbook knows which file to restore.
+        # The backup job id is the rollback source. Keep the lock and references
+        # until AWX confirms success; a failed/unknown rollback needs intervention.
         res = await self._run_step(
             self._step_request(
                 intent,
@@ -505,13 +515,20 @@ class ChangeActivities:
                 extra_vars={"backups": str(backups)},
             )
         )
+        if not res["ok"]:
+            return {
+                "ok": False,
+                "job_id": res["job_id"],
+                "failures": ["AWX did not confirm rollback success"],
+                "evidence": {"rollback": res, "trigger": inp.evidence},
+            }
         await self._unsilence_monitoring(intent.ticket_number)
         if self._notifications:
             await self._notifications.rolled_back(intent.ticket_number, str(inp.evidence))
         record_change("rolled_back")
         await self._locks.release_all(list(intent.devices), intent.ticket_number)
         self._backups.pop(intent.ticket_number, None)
-        return {"ok": bool(res["ok"]), "job_id": res["job_id"], "evidence": inp.evidence}
+        return {"ok": True, "job_id": res["job_id"], "evidence": inp.evidence}
 
 
 def all_activities(activities: ChangeActivities) -> list[Callable[..., Any]]:
