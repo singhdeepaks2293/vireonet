@@ -19,7 +19,7 @@ async def test_register_is_idempotent_by_serial(tmp_path) -> None:
     svc, engine = await _service(tmp_path)
     d1, created1 = await svc.register_device(
         hostname="leaf-01",
-        serial="FOC1",
+        serial="FOC1234A",
         mac_address="aa:bb:cc:dd:ee:ff",
         model="C9300",
         platform="ios-xe",
@@ -27,7 +27,7 @@ async def test_register_is_idempotent_by_serial(tmp_path) -> None:
     )
     d2, created2 = await svc.register_device(
         hostname="leaf-01",
-        serial="FOC1",
+        serial="FOC1234A",
         mac_address="aa:bb:cc:dd:ee:ff",
         model="C9300",
         platform="ios-xe",
