@@ -119,14 +119,17 @@ async def register_device(
     _role: str = Depends(require_role("operator")),
 ) -> dict[str, object]:
     svc = _ztp_service(request)
-    device, created = await svc.register_device(
-        hostname=payload.hostname,
-        serial=payload.serial,
-        mac_address=payload.mac_address,
-        model=payload.model,
-        platform=payload.platform,
-        site=payload.site,
-    )
+    try:
+        device, created = await svc.register_device(
+            hostname=payload.hostname,
+            serial=payload.serial,
+            mac_address=payload.mac_address,
+            model=payload.model,
+            platform=payload.platform,
+            site=payload.site,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not created:
         raise HTTPException(
             status_code=409,
