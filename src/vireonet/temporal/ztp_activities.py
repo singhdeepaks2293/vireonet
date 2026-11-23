@@ -16,8 +16,16 @@ from vireonet.adapters.protocols import (
     ServiceNowProtocol,
 )
 from vireonet.batfish_gate import run_batfish_gate
+from vireonet.config_store.device_repos import DeviceRepoManager
+from vireonet.config_store.store import ConfigStore
+from vireonet.drift.baseline import commit_baseline
+from vireonet.execution.awx_engine import AwxEngine
+from vireonet.execution.engine import ExecutionEngine
+from vireonet.execution.mapping import ExecutionMapping
+from vireonet.execution.types import DeviceRef, StepRequest
 from vireonet.intent import parse_intent
 from vireonet.policy import PolicyEngine
+from vireonet.services.backup import BEGIN_MARKER, extract_running_config
 from vireonet.ztp.service import ZtpService
 from vireonet.ztp.templates import render_bootstrap
 
@@ -74,11 +82,22 @@ class ZtpActivities:
         http_base_url: str = "http://10.0.0.5/ztp",
         pnp_server_url: str = "",
         policy: PolicyEngine | None = None,
+        engine: ExecutionEngine | None = None,
+        config_store: ConfigStore | None = None,
+        device_repos: DeviceRepoManager | None = None,
     ) -> None:
         self._sessions = sessions
         self._netbox = netbox
         self._dhcp = dhcp
         self._awx = awx
+        if engine is not None:
+            self._engine = engine
+        else:
+            try:
+                mapping = ExecutionMapping.from_yaml("policies/execution.yaml")
+            except (OSError, ValueError):
+                mapping = ExecutionMapping.default()
+            self._engine = AwxEngine(awx, mapping)
         self._batfish = batfish
         self._snow = servicenow
         self._ztp = ztp_service
@@ -86,6 +105,12 @@ class ZtpActivities:
         self._http_base = http_base_url
         self._pnp_url = pnp_server_url
         self._policy = policy
+        # D1: optional baseline wiring. When both are set, a successful
+        # day-1 commits the collected running config as the device's
+        # baseline via the shared commit_baseline (best-effort: a
+        # baseline failure is recorded in the result, never fails day-1).
+        self._config_store = config_store
+        self._device_repos = device_repos
 
     @activity.defn(name="ztp_create_reservation")
     async def create_reservation(self, inp: ReservationInput) -> dict[str, Any]:
@@ -146,18 +171,56 @@ class ZtpActivities:
         gate = await run_batfish_gate(intent, {}, self._batfish, blocking=blocking)
         if gate["blocks"]:
             return {"ok": False, "error": f"Batfish gate failed: {gate['failures']}", "gate": gate}
-        job = await self._awx.launch_job(
-            "ztp-day1",
-            {"ticket": inp.ticket_number, "hostname": inp.hostname, "serial": inp.serial},
-            limit=inp.hostname,
+        job = await self._engine.apply(
+            StepRequest(
+                ticket_number=inp.ticket_number,
+                device=DeviceRef(name=inp.hostname, platform=inp.platform),
+                step="apply",
+                change_type="ztp_device",
+                job_type="playbook",
+                extra_vars={"hostname": inp.hostname, "serial": inp.serial},
+                dry_run=False,
+                correlation_id=inp.ticket_number,
+            )
         )
-        poll = getattr(self._awx, "poll_job", None)
-        if poll is not None and job.status not in {"successful", "failed", "canceled"}:
-            job = await poll(job.id, timeout_seconds=600)
-        if job.status != "successful":
-            return {"ok": False, "error": f"AWX ztp-day1 job {job.id} {job.status}"}
+        if not job.ok:
+            return {"ok": False, "error": f"AWX ztp-day1 job {job.job_id} {job.status.value}"}
         await self._ztp.set_stage(inp.serial, "day1_applied")
-        return {"ok": True, "job_id": job.id, "gate": gate}
+        result: dict[str, Any] = {"ok": True, "job_id": job.job_id, "gate": gate}
+        # D1 baseline: collect the running config the day-1 job just
+        # pushed and commit it as the baseline, best-effort.
+        if self._config_store is not None and self._device_repos is not None:
+            try:
+                collected = await self._engine.collect_state(
+                    StepRequest(
+                        ticket_number=inp.ticket_number,
+                        device=DeviceRef(name=inp.hostname, platform=inp.platform),
+                        step="collect_state",
+                        change_type="ztp_device",
+                        dry_run=True,
+                        correlation_id=inp.ticket_number,
+                    )
+                )
+                raw = str(
+                    collected.output.get("running_config")
+                    or collected.output.get("stdout")
+                    or collected.output.get("stdout_tail")
+                    or ""
+                )
+                if BEGIN_MARKER in raw:
+                    with suppress(ValueError):
+                        raw = extract_running_config(raw)
+                if raw.strip():
+                    result["baseline_commit"] = await commit_baseline(
+                        device=inp.hostname,
+                        running_config=raw,
+                        ticket=inp.ticket_number,
+                        config_store=self._config_store,
+                        device_repos=self._device_repos,
+                    )
+            except Exception as exc:  # noqa: BLE001 — baseline is best-effort, never fails day-1
+                result["baseline_error"] = str(exc)
+        return result
 
     @activity.defn(name="ztp_activate")
     async def activate(self, inp: ActivateInput) -> dict[str, Any]:

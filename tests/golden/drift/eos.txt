@@ -1,0 +1,13 @@
+! EOS running config
+hostname eos-01
+eos-01 uptime is 5 days, 2 hours
+!
+interface Ethernet2
+ description peer-b
+ no shutdown
+!
+interface Ethernet1
+ description PEER-A-CHANGED
+ no shutdown
+!
+end

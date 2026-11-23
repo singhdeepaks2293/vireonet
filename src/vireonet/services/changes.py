@@ -11,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from vireonet.adapters.protocols import AwxProtocol, NetBoxProtocol, ServiceNowProtocol
 from vireonet.config_store.store import ConfigStore
+from vireonet.execution.engine import ExecutionEngine
 from vireonet.intent import ChangeIntent, parse_intent
-from vireonet.models import AuditLog, Change
+from vireonet.models import AuditLog, Change, DriftRecord
 from vireonet.policy import PolicyEngine
 from vireonet.services.backup import BackupService
 from vireonet.state_machine import ChangeState, record_transition
@@ -27,6 +28,44 @@ def _coerce_change_id(change_id: str) -> uuid.UUID | None:
         return uuid.UUID(str(change_id))
     except (ValueError, AttributeError, TypeError):
         return None
+
+
+def _find_in_evidence(evidence: Any, key: str) -> Any:
+    """First value stored under ``key`` anywhere nested in audit evidence."""
+    if isinstance(evidence, dict):
+        if key in evidence:
+            return evidence[key]
+        for value in evidence.values():
+            found = _find_in_evidence(value, key)
+            if found is not None:
+                return found
+    elif isinstance(evidence, list):
+        for value in evidence:
+            found = _find_in_evidence(value, key)
+            if found is not None:
+                return found
+    return None
+
+
+def _normalise_declared(raw: Any) -> list[dict[str, Any]]:
+    """Declared changes as stored in evidence, coerced to the documented
+    shape; anything malformed is dropped, never invented."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        out.append(
+            {
+                "object_type": str(item.get("object_type", "")),
+                "identifier": str(item.get("identifier", "")),
+                "field": str(item.get("field", "")),
+                "old_value": str(item.get("old_value", "")),
+                "new_value": str(item.get("new_value", "")),
+            }
+        )
+    return out
 
 
 class DuplicateTicketError(ValueError):
@@ -97,6 +136,7 @@ class ChangeService:
         policy: PolicyEngine,
         config_store: ConfigStore | None = None,
         awx: AwxProtocol | None = None,
+        engine: ExecutionEngine | None = None,
     ) -> None:
         self._sessions = session_factory
         self._snow = servicenow
@@ -104,6 +144,7 @@ class ChangeService:
         self._policy = policy
         self._config_store = config_store
         self._awx = awx
+        self._engine = engine
 
     async def _existing(self, session: AsyncSession, ticket: str) -> Change | None:
         return (
@@ -201,6 +242,94 @@ class ChangeService:
                 await session.commit()
                 await session.refresh(change)
                 return change, True
+
+    async def create_config_restore(
+        self,
+        *,
+        device: str,
+        ticket: str,
+        actor: str,
+        baseline_ref: str | None = None,
+    ) -> Change:
+        """Create the Change row for a drift rollback (D4).
+
+        A rollback restores already-approved baseline config, so it is not
+        a catalog intent (intent.py only knows vlan/acl/route/interface/ztp)
+        and cannot go through create_from_intent. This row carries
+        change_type "config_restore" with the baseline reference in the
+        intent, and is validated on creation: the only validation a restore
+        needs is that a baseline exists, which the caller (drift.resolve)
+        has already established by fetching the baseline content. The row
+        then moves through the normal states (planned -> ci_passed ->
+        approved -> pre_checked -> applied -> post_checked) via
+        transition_change; CI is recorded as not-applicable because there
+        is no Git MR for restoring already-approved config.
+        """
+        async with self._sessions() as session:
+            existing = await self._existing(session, ticket)
+            if existing is not None:
+                return existing
+            change = Change(
+                ticket_number=ticket,
+                change_type="config_restore",
+                state=ChangeState.RECEIVED,
+                requester=actor,
+                intent={
+                    "change_type": "config_restore",
+                    "devices": [device],
+                    "site": "",
+                    "ticket_number": ticket,
+                    "requested_by": actor,
+                    "baseline_ref": baseline_ref or "",
+                },
+                devices=[device],
+            )
+            session.add(change)
+            await session.flush()
+            await record_transition(
+                session,
+                change,
+                ChangeState.VALIDATED,
+                actor=actor,
+                reason="drift rollback: baseline restore, baseline exists",
+                evidence={"baseline_ref": baseline_ref or ""},
+            )
+            await session.commit()
+            await session.refresh(change)
+            return change
+
+    async def transition_change(
+        self,
+        change_id: str,
+        to_state: ChangeState,
+        *,
+        actor: str,
+        reason: str,
+        evidence: dict[str, Any] | None = None,
+    ) -> Change | None:
+        """Move a change through one legal transition (D4 rollback driver).
+
+        Raises ValueError on an illegal transition; returns None when the
+        change does not exist.
+        """
+        pk = _coerce_change_id(change_id)
+        if pk is None:
+            return None
+        async with self._sessions() as session:
+            change = await session.get(Change, pk)
+            if change is None:
+                return None
+            await record_transition(
+                session,
+                change,
+                to_state,
+                actor=actor,
+                reason=reason,
+                evidence=evidence or {},
+            )
+            await session.commit()
+            await session.refresh(change)
+            return change
 
     async def get(self, change_id: str) -> Change | None:
         pk = _coerce_change_id(change_id)
@@ -317,6 +446,15 @@ class ChangeService:
             checks: list[dict[str, Any]] = []
             batfish: dict[str, Any] = {}
             awx_jobs: list[dict[str, Any]] = []
+            declared_changes: list[dict[str, Any]] = []
+            script_name: str | None = None
+            script_sha: str | None = None
+            # The change record stores no job_type column; the intent may
+            # carry one, otherwise the default is "playbook" (see below).
+            job_type = "playbook"
+            intent_job_type = (change.intent or {}).get("job_type")
+            if intent_job_type in {"playbook", "python"}:
+                job_type = str(intent_job_type)
             for r in rows:
                 ev = r.evidence or {}
                 if isinstance(ev.get("checks"), list):
@@ -339,6 +477,45 @@ class ChangeService:
                             "to_state": r.to_state,
                         }
                     )
+                # E5 execution provenance, derived from stored evidence only:
+                # a run-python template (or a script_name in evidence) means
+                # the job was a python script job; otherwise the default is
+                # "playbook" — the change record stores no job_type column,
+                # and no value is invented when the evidence is silent.
+                if _find_in_evidence(ev, "template") == "run-python":
+                    job_type = "python"
+                found_script = _find_in_evidence(ev, "script_name")
+                if isinstance(found_script, str) and found_script:
+                    job_type = "python"
+                    script_name = found_script
+                    found_sha = _find_in_evidence(ev, "script_sha")
+                    if isinstance(found_sha, str) and found_sha:
+                        script_sha = found_sha
+                if not declared_changes:
+                    declared_changes = _normalise_declared(
+                        _find_in_evidence(ev, "declared_changes")
+                    )
+            # Reconciliation status comes from the change state; the drift
+            # count from drift records linked to this ticket. A state other
+            # than reconciled / reconciliation_pending has no reconciliation
+            # status (None), and a change with no drift records reports 0.
+            state_value = str(
+                change.state.value if hasattr(change.state, "value") else change.state
+            )
+            reconciliation_status: str | None = None
+            if state_value == "reconciled":
+                reconciliation_status = "reconciled"
+            elif state_value == "reconciliation_pending":
+                reconciliation_status = "reconciliation_pending"
+            drift_count = int(
+                (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(DriftRecord)
+                        .where(DriftRecord.linked_ticket == change.ticket_number)
+                    )
+                ).scalar_one()
+            )
             return {
                 "change": change,
                 "transitions": transitions,
@@ -348,6 +525,12 @@ class ChangeService:
                 "checks": checks,
                 "batfish": batfish,
                 "awx_jobs": awx_jobs,
+                "job_type": job_type,
+                "script_name": script_name,
+                "script_sha": script_sha,
+                "declared_changes": declared_changes,
+                "reconciliation_status": reconciliation_status,
+                "drift_count": drift_count,
             }
 
     async def collect_before_change(
@@ -360,14 +543,17 @@ class ChangeService:
         the change does not exist. `actor` is reserved for the audit trail;
         collection itself records no state transition.
         """
-        if self._config_store is None or self._awx is None:
+        if self._config_store is None or (self._awx is None and self._engine is None):
             raise ValueError(
                 "config store and AWX adapter are required to collect a running config"
             )
         change = await self.get(change_id)
         if change is None:
             raise ValueError(f"change {change_id} not found")
-        backup = BackupService(self._awx, self._config_store)
+        backup = BackupService(
+            self._engine if self._engine is not None else self._awx,  # type: ignore[arg-type]
+            self._config_store,
+        )
         results: list[dict[str, Any]] = []
         for device in list(change.devices or []):
             results.append(
@@ -376,6 +562,55 @@ class ChangeService:
                 )
             )
         return results
+
+    async def reconcile_override(self, change_id: str, *, actor: str, reason: str) -> Change | None:
+        """Approver override for a change stuck in reconciliation_pending (E3).
+
+        Choice (see POST /changes/{id}/reconcile-override): the override is
+        recorded in the audit trail and the change is moved to reconciled,
+        which makes it close-eligible. It is two legal transitions —
+        reconciliation_pending -> reconciling -> reconciled — both carrying
+        the override evidence, because there is no direct
+        reconciliation_pending -> reconciled transition. The workflow itself
+        has already returned "reconciliation_pending"; this does not re-run
+        the workflow close activity, it only records the override and
+        unblocks a manual close.
+        """
+        if not reason.strip():
+            raise ValueError("reconcile override requires a reason")
+        pk = _coerce_change_id(change_id)
+        if pk is None:
+            return None
+        async with self._sessions() as session:
+            change = await session.get(Change, pk)
+            if change is None:
+                return None
+            state = ChangeState(change.state) if isinstance(change.state, str) else change.state
+            if state is not ChangeState.RECONCILIATION_PENDING:
+                raise ValueError(
+                    f"reconcile override is only legal from reconciliation_pending, "
+                    f"not {state.value}"
+                )
+            evidence = {"override": True, "reason": reason}
+            await record_transition(
+                session,
+                change,
+                ChangeState.RECONCILING,
+                actor=actor,
+                reason=f"reconcile override: {reason}",
+                evidence=evidence,
+            )
+            await record_transition(
+                session,
+                change,
+                ChangeState.RECONCILED,
+                actor=actor,
+                reason=f"reconcile override: {reason}",
+                evidence=evidence,
+            )
+            await session.commit()
+            await session.refresh(change)
+            return change
 
     async def rollback(
         self, change_id: str, *, actor: str, reason: str = "manual rollback"

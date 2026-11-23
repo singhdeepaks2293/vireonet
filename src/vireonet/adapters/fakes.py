@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from vireonet.adapters.base import AdapterConfig, AdapterHealth, BaseAdapter
 from vireonet.adapters.errors import AdapterNotFound, AdapterValidationError
+from vireonet.adapters.lab import LabNode
 from vireonet.adapters.protocols import (
     AwxJob,
     BatfishResult,
@@ -177,7 +178,15 @@ class FakeAwxAdapter(_FakeBase):
         super().__init__("awx", ["launch_job", "poll_job", "cancel", "templates"])
         self.jobs: dict[int, AwxJob] = {}
         self._next_id = 1
-        self.templates = ["backup", "pre-check", "dry-run", "apply", "post-check", "rollback"]
+        self.templates = [
+            "backup",
+            "pre-check",
+            "dry-run",
+            "apply",
+            "post-check",
+            "rollback",
+            "ztp-day1",
+        ]
 
     async def launch_job(
         self, template: str, extra_vars: dict[str, str], limit: str | None = None
@@ -362,6 +371,53 @@ class FakeEveNgAdapter(_FakeBase):
         self.labs.pop(lab_id, None)
 
 
+class FakeContainerlabAdapter(_FakeBase):
+    """Fake Containerlab lab backend (E4). In-memory nodes; deploy returns
+    the lab name, wait_ready/inspect report both leaves running with mgmt
+    IPs, exec echoes the command back as fake device output."""
+
+    def __init__(self) -> None:
+        super().__init__("containerlab", ["deploy", "inspect", "exec", "save_config", "destroy"])
+        self.labs: dict[str, list[dict[str, str]]] = {}
+        self.destroyed: list[str] = []
+
+    async def deploy(self, topology_path: str, name: str) -> str:
+        self._record("deploy", name=name, topology=topology_path)
+        self.labs[name] = [
+            {"name": "leaf-01", "kind": "cisco_iol", "mgmt_ip": "10.0.1.11", "state": "running"},
+            {"name": "leaf-02", "kind": "cisco_iol", "mgmt_ip": "10.0.1.12", "state": "running"},
+        ]
+        return name
+
+    async def wait_ready(self, lab_id: str, *, timeout_seconds: int = 600) -> list[LabNode]:
+        self._record("wait_ready", lab_id=lab_id)
+        return await self.inspect(lab_id)
+
+    async def inspect(self, lab_id: str) -> list[LabNode]:
+        self._record("inspect", lab_id=lab_id)
+        try:
+            nodes = self.labs[lab_id]
+        except KeyError:
+            raise AdapterNotFound("containerlab", "inspect", lab_id) from None
+        return [LabNode(**n) for n in nodes]
+
+    async def exec(self, lab_id: str, node: str, command: str) -> str:
+        self._record("exec", lab_id=lab_id, node=node, command=command)
+        await self.inspect(lab_id)
+        return f"{node}# {command}\nCisco IOS Software, fake output\n"
+
+    async def save_config(self, lab_id: str, node: str) -> str:
+        return await self.exec(lab_id, node, "show running-config")
+
+    async def restore_config(self, lab_id: str, node: str, config: str) -> None:
+        raise NotImplementedError("containerlab restore is kind-specific")
+
+    async def destroy(self, lab_id: str) -> None:
+        self._record("destroy", lab_id=lab_id)
+        self.destroyed.append(lab_id)
+        self.labs.pop(lab_id, None)
+
+
 class FakeDhcpAdapter(_FakeBase):
     def __init__(self) -> None:
         super().__init__(
@@ -474,6 +530,7 @@ ALL_FAKE_ADAPTERS: dict[str, Callable[[], _FakeBase]] = {
     "batfish": FakeBatfishAdapter,
     "vault": FakeVaultAdapter,
     "eveng": FakeEveNgAdapter,
+    "containerlab": FakeContainerlabAdapter,
     "dhcp": FakeDhcpAdapter,
     "notification": FakeNotificationAdapter,
     "monitoring": FakeMonitoringAdapter,

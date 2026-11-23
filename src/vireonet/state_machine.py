@@ -45,8 +45,16 @@ LEGAL_TRANSITIONS: dict[ChangeState, frozenset[ChangeState]] = {
         {ChangeState.POST_CHECKED, ChangeState.ROLLED_BACK, ChangeState.FAILED}
     ),
     ChangeState.POST_CHECKED: frozenset(
-        {ChangeState.CLOSED, ChangeState.ROLLED_BACK, ChangeState.FAILED}
+        {ChangeState.RECONCILING, ChangeState.ROLLED_BACK, ChangeState.FAILED}
     ),
+    # E3: a post-checked change reconciles Git/NetBox before it may close.
+    # ROLLED_BACK is kept from the pre-E3 mapping so a manual rollback from
+    # post_checked (ChangeService.rollback) still works.
+    ChangeState.RECONCILING: frozenset(
+        {ChangeState.RECONCILED, ChangeState.RECONCILIATION_PENDING, ChangeState.FAILED}
+    ),
+    ChangeState.RECONCILIATION_PENDING: frozenset({ChangeState.RECONCILING, ChangeState.FAILED}),
+    ChangeState.RECONCILED: frozenset({ChangeState.CLOSED}),
     ChangeState.CLOSED: frozenset(),
     ChangeState.REJECTED: frozenset(),
     ChangeState.CI_FAILED: frozenset(),

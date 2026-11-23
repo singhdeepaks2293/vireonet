@@ -1,0 +1,34 @@
+# Execution mapping: which AWX job template runs each engine step.
+# Most-specific match wins: exact change_type/platform beats "*".
+# job_type "playbook" runs an Ansible playbook template; job_type "python"
+# runs ansible/playbooks/run_python.yml, which executes a Python runner.
+mappings:
+  - change_type: "*"
+    platform: "*"
+    job_type: playbook
+    steps:
+      backup: backup
+      pre_check: pre-check
+      dry_run: dry-run
+      apply: apply
+      post_check: post-check
+      rollback: rollback
+      collect_state: backup
+  - change_type: ztp_device
+    platform: "*"
+    job_type: playbook
+    steps:
+      apply: ztp-day1
+  - change_type: "*"
+    platform: nxos
+    job_type: playbook
+    steps:
+      apply:
+        template: apply
+        extra_vars:
+          platform_family: nxos
+  - change_type: "*"
+    platform: "*"
+    job_type: python
+    steps:
+      run_python: run-python

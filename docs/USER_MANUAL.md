@@ -35,13 +35,15 @@
 12. [System health](#12-system-health)
 13. [Adapters](#13-adapters)
 14. [IAM](#14-iam)
-15. [Config version control](#15-config-version-control)
-16. [Gitea setup](#16-gitea-setup)
-17. [Style reference](#17-style-reference)
-18. [Daily workflows](#18-daily-workflows)
-19. [Checking health](#19-checking-health)
-20. [Troubleshooting and FAQ](#20-troubleshooting-and-faq)
-21. [Glossary](#21-glossary)
+15. [Scripts](#15-scripts)
+16. [Config version control](#16-config-version-control)
+17. [Drift](#17-drift)
+18. [Gitea setup](#18-gitea-setup)
+19. [Style reference](#19-style-reference)
+20. [Daily workflows](#20-daily-workflows)
+21. [Checking health](#21-checking-health)
+22. [Troubleshooting and FAQ](#22-troubleshooting-and-faq)
+23. [Glossary](#23-glossary)
 
 ---
 
@@ -116,7 +118,7 @@ Ports on the host:
 > works when your browser is on the same machine as Docker. If you browse from
 > another machine, rebuild with the host's LAN address, for example
 > `VITE_API_URL=http://10.228.197.24:8000 docker compose up --build -d`, and open
-> the UI at `http://10.228.197.24:5173`. See §20 for the CORS and
+> the UI at `http://10.228.197.24:5173`. See §22 for the CORS and
 > connection-refused errors this causes when it is wrong.
 
 ### Start without Docker (outline)
@@ -171,9 +173,9 @@ tickets, or logs.
 | Role | Rank | Can do |
 |---|---|---|
 | viewer | 1 | Read changes, health, adapters, locks, ZTP devices. Cannot approve, create, signal, or release anything. |
-| operator | 2 | Everything a viewer can, plus create changes, send signals, abort and roll back changes, retry/reset ZTP devices, release device locks. |
-| approver | 3 | Everything an operator can, plus approve and reject changes waiting for approval. |
-| admin | 4 | Everything, plus manage users and roles in IAM (§14). |
+| operator | 2 | Everything a viewer can, plus create changes, send signals, abort and roll back changes, retry/reset ZTP devices, release device locks, and emergency-accept drift. |
+| approver | 3 | Everything an operator can, plus approve and reject changes waiting for approval, and decide drift (roll back, merge, grant exception). |
+| admin | 4 | Everything, plus manage users and roles in IAM (§14), view the Scripts manifest (§15), and manage drift ignore rules (§17). |
 
 Your role is set by an admin and is shown in the top bar as `Role: admin` (or your
 role). The UI hides or disables buttons you are not allowed to use — for example,
@@ -186,11 +188,12 @@ in again.
 
 Every screen after login has the same layout:
 
-- **Left navigation** (fixed, text labels, no icons): Changes, ZTP devices,
-  Approvals, Locks and change windows, System health, Adapters, IAM, Config repos,
+- **Left navigation** (fixed, text labels, no icons): Changes, Drift,
+  Exceptions, ZTP devices, Approvals, Locks and change windows, System health,
+  Adapters, IAM, Scripts (admin only — hidden for other roles), Config repos,
   Style reference. Clicking an item opens that screen. The current screen is
   highlighted. **Gitea setup has no left-nav entry** — it is reached from a link on
-  the Adapters page (§13, §16).
+  the Adapters page (§13, §18).
 - **Top bar**: the screen title on the left; on the right, adapter status
   (`Adapters: ok`, or `Adapters down: N`, or `Adapter health: unavailable`),
   your role (`Role: admin`), a **Theme: dark** / **Theme: light** button, and a
@@ -210,7 +213,7 @@ Every screen after login has the same layout:
 > on ZTP Devices the Site filter repopulates with `dc1`, even after you click
 > **Clear filters** (the URL goes back to the clean route, but the field fills in
 > again). This is a known UI bug, not data — the lists still show 0 items in a fresh
-> system. See §20.
+> system. See §22.
 
 ## 6. Login
 
@@ -234,7 +237,7 @@ displayed.
 On success you are taken to the Changes list (`/changes`). On failure the page shows
 "Invalid username or password." — this message is also shown when the login request
 never reaches the API at all (for example a CORS or connection error), so if you are
-sure the password is right, check §20 before resetting anything.
+sure the password is right, check §22 before resetting anything.
 
 **Buttons on this screen:**
 
@@ -310,7 +313,7 @@ the **Open full detail** link on the Approvals screen.
 > (0 changes, 0 approvals waiting), so there was no detail page to open. Everything
 > in this section is verified from the frontend code (`frontend/src/pages/ChangeDetail.tsx`),
 > not from a screenshot. The layout below is what you will see once a change exists.
-> To get one, submit a change — see §18.1.
+> To get one, submit a change — see §20.1.
 
 **What you see:**
 
@@ -322,6 +325,23 @@ the **Open full detail** link on the Approvals screen.
   below). If no action is legal, the page says "No actions are legal for state …".
 - Five tabs: **Checks**, **Diff**, **Batfish results**, **AWX job output**,
   **Audit trail**.
+
+### Execution section
+
+Above the tabs, an **Execution** section shows how the change actually ran,
+derived from stored evidence only (nothing is invented when the evidence is
+silent):
+
+| Row | What it shows |
+|---|---|
+| Job type | `playbook` or `python`. Defaults to `playbook` when the change record stores no job type. |
+| AWX job | The AWX job ID; a link opening the job in AWX in a new tab when an AWX base URL is configured. |
+| Script | Script name and SHA (first 12 chars) when the job was a script job. |
+| Reconciliation | `reconciled`, `reconciliation_pending`, or `—`. When pending, the drift record count is shown and the note says an approver override is required before close. |
+
+Under it, a **Declared changes** table (Object, Identifier, Field, Old, New)
+lists what the job declared it changed; when nothing was recorded the page
+says "No declared changes recorded for this change."
 
 ### Action buttons
 
@@ -371,7 +391,7 @@ DHCP reservation, Actions.**
 > "No ZTP devices match these filters." / "0 devices"
 
 Normal on a fresh system: a device only appears here after it is registered
-(see §18.4).
+(see §20.4).
 
 ### Buttons on this screen
 
@@ -481,7 +501,8 @@ the policy file, not from the UI.
 
 **Route:** `/health`. Left-nav label: **System health**.
 
-Two tables: VireoNet's own components, and the adapters. Check this screen first
+Four tables: VireoNet's own components, AWX and its Execution Environment,
+the lab backends, and the adapters. Check this screen first
 whenever anything looks wrong.
 
 ### Components table
@@ -507,19 +528,47 @@ Overall: **"Overall: ok"**.
 > as "not verified by this check", not as a fault — but if you also see failed writes,
 > check Postgres first.
 
+### AWX and Execution Environment table
+
+Columns: **Item, Status, Detail.**
+
+| Item | Status | Detail |
+|---|---|---|
+| awx | `ok` / `down` / `not_configured` | AWX reachable, or why not. |
+| execution environment: VireoNet EE | `unknown` | The EE name comes from `VIREONET_AWX_EXECUTION_ENVIRONMENT` (default `VireoNet EE`). The status is honestly `unknown`: the AWX API exposes no call that confirms the EE is registered on the job templates, so VireoNet never claims it is registered. Verify in AWX (Job Templates → Execution Environment). Device sessions run only inside this Execution Environment. |
+
+### Lab backends table
+
+Columns: **Backend, Status, Capabilities, Detail.** One row per lab backend
+enabled by `VIREONET_LAB_BACKEND` (`eveng` | `containerlab` | `both`,
+default `eveng`): **EVE-NG** and/or **Containerlab**, each with its
+`health_check` status and capabilities. To change which backends are enabled,
+set `VIREONET_LAB_BACKEND` and restart the API; in real mode the API refuses
+to start with an unknown backend, or with `containerlab` selected but
+`VIREONET_CONTAINERLAB_HOST` / `VIREONET_CONTAINERLAB_USER` unset. In fake
+mode both backends report `ok` with fake capabilities.
+
 ### Adapters table
 
 Columns: **Adapter, Status, Latency, Last success, Capabilities** (headings vary
 slightly by build; the observed rows are below).
 
-Observed on the live walkthrough (fake mode): all 10 adapters — servicenow, netbox,
-awx, gitlab, batfish, vault, eveng, dhcp, notification, monitoring — status **ok**,
+Observed on the live walkthrough (fake mode): all 11 adapters — servicenow, netbox,
+awx, gitlab, batfish, vault, eveng, containerlab, dhcp, notification, monitoring — status **ok**,
 latency **—**, last success **never**.
 
 In fake mode every adapter reports `ok` because there is nothing real to fail, and
 `last success: never` because no real call has ever been made. In real mode, a
 `down` adapter here is the first sign that a system is unreachable — check its base
 URL and credentials (see `docs/ADAPTERS.md`).
+
+### Drift scans table
+
+Columns: **Site, Status, Started, Scanned, With drift, Failed** — one
+row per site with the last drift scan. Above the table: the count of
+open drift records. Below it: the never-scanned devices (best-effort —
+see §17). When no scan has run yet the page says "No drift scan has run
+yet." rather than showing an empty table.
 
 ### Buttons on this screen
 
@@ -540,17 +589,17 @@ restart the API and worker.
 
 Intro text on the page: "To change an adapter, update its config or Vault entry and
 restart the API and worker. Using Gitea? Set it up here: **Gitea setup**." — the
-**Gitea setup** text is a link to `/setup/gitea` (§16).
+**Gitea setup** text is a link to `/setup/gitea` (§18).
 
 ### The table
 
-> "10 adapters configured."
+> "11 adapters configured."
 
 Columns: **Adapter, Enabled, Mode, Endpoint, Timeout, Retries, Rate limit,
 Capabilities.**
 
-Observed on the live walkthrough (fake mode), for all 10 adapters (servicenow,
-netbox, awx, gitlab, batfish, vault, eveng, dhcp, notification, monitoring):
+Observed on the live walkthrough (fake mode), for all 11 adapters (servicenow,
+netbox, awx, gitlab, batfish, vault, eveng, containerlab, dhcp, notification, monitoring):
 
 | Field | Value |
 |---|---|
@@ -572,7 +621,7 @@ API was started with `VIREONET_ADAPTER_MODE=fake` — change the setting and res
 | Density: comfortable | Anyone signed in | Toggles comfortable/compact row spacing. |
 | Sort buttons (per column) | Anyone signed in | Sort the table by that column. |
 | Retry | Anyone signed in | Shown only if loading fails. Re-fetches the list. |
-| Gitea setup (link) | Anyone signed in | Opens the Gitea setup page (§16). |
+| Gitea setup (link) | Anyone signed in | Opens the Gitea setup page (§18). |
 
 For what each adapter connects to, what credentials it needs, and how to verify it,
 see `docs/ADAPTERS.md`.
@@ -622,7 +671,28 @@ There are **no action buttons on the Roles tab** — roles and their permissions
 fixed in code. If you need a permission a role does not have, give the user a
 higher role.
 
-## 15. Config version control
+## 15. Scripts
+
+**Route:** `/scripts`. Left-nav label: **Scripts**. Admin only — the nav entry
+is hidden for non-admins, and the page itself says "Admin role is required to
+view the script manifest" if you open the route directly.
+
+**What you see:** a read-only table of the script manifest
+(`policies/scripts.yaml`) — the custom scripts that may run, at exactly the
+listed SHA, for the listed change types and platforms.
+
+Columns: **Name, SHA, Allowed change types, Platforms, Writes scope, Last run.**
+
+- **SHA** shows the first 12 characters; hover to see the full SHA.
+- **Last run** is the most recent run recorded in the audit log, or `never`
+  when no run is recorded there.
+- There are **no edit buttons** on this page. The manifest is edited by merge
+  request only — see `docs/SCRIPTS.md` for the contract a script must meet
+  (stdin/stdout shape, dry-run hash approval, declared changes).
+
+If the table fails to load, a **Retry** button re-fetches it.
+
+## 16. Config version control
 
 **Route:** `/config`. Left-nav label: **Config repos**.
 
@@ -656,7 +726,75 @@ Device repos must already exist in Git — VireoNet does not create them. Histor
 shows "No commits yet" even if it has commits. See `docs/ADAPTERS.md` and
 `README.md` for the known limitations.
 
-## 16. Gitea setup
+## 17. Drift
+
+**Route:** `/drift` (list), `/drift/:id` (detail), `/exceptions` (active
+exceptions). Left-nav labels: **Drift**, **Exceptions**. Full reference:
+[`docs/DRIFT.md`](docs/DRIFT.md).
+
+Drift is the difference between a device's running config and what the
+system of record says it should be. Four kinds: **unmanaged** (running
+hash vs golden baseline), **intent** (rendered intent vs running),
+**state** (NetBox vs collected facts), **compliance** (rules). States:
+`detected → under_review → reverting | merge_pending | exception_active
+| resolved`; an expired exception goes
+`exception_active → exception_expired → under_review`.
+
+### Drift list
+
+- Heading: **Drift**. A table: **Device, Kind, Severity, Status, First
+  seen, Last seen, Owner, Age**. Severity is a coloured badge
+  (critical / high / medium / low).
+- Filters (URL-synced): **Device** (text), **Site** (text), **Kind**,
+  **Severity**, **Status** dropdowns. **Start scan** starts a drift scan
+  for the filtered site and reports the workflow id (or queued scan id).
+- **Export CSV** downloads the filtered records. **Previous** / **Next**
+  page through them. Click a row (or press Enter on it) to open the
+  record. Empty state: "No drift records match these filters."
+
+### Drift detail
+
+- Heading: **Drift \<device\>**, with the severity badge. A **Status
+  timeline** lists every state move (from → to, actor, when, reason).
+- Tabs: **Diff vs baseline** (the stored diff, with baseline and running
+  hashes), **Diff vs intent**, **State findings**, **Compliance**,
+  **Batfish impact**, **Attribution** (who made the change, when —
+  best-effort; "unknown" when the scan could not prove it), and
+  **Decisions / Audit**. Tabs with no stored data say so honestly
+  instead of inventing content — for example, Batfish impact is only
+  shown when the scan attached it.
+- **Resolve this drift** (approver/admin only): fill in **Reason
+  (required)** and **ServiceNow reference (required)** — the buttons
+  stay disabled until both are filled — then:
+  - **Roll back**: starts a normal change restoring the baseline
+    config (backup, pre-check, dry-run, apply, post-check; automatic
+    rollback on failure). Resolves only when a re-collect confirms the
+    running config matches the baseline.
+  - **Merge**: creates a `drift/<device>/<record>` branch and a merge
+    request with a per-device vars override. Never touches a shared
+    template. Stays merge-pending until the MR is merged (baseline
+    updated) or closed unmerged (back to under review).
+  - **Grant exception**: keeps the config and ignores that exact diff
+    until the expiry. Needs **Exception owner** and **Exception
+    expiry** as well; the button stays disabled until those are filled.
+  Each action opens a confirm dialog stating exactly what will happen.
+  Whoever made the manual change cannot approve their own exception or
+  merge (the API returns 403). Operators can also **emergency-accept**
+  a drift from the API (not a UI button) with a retrospective deadline.
+- **Exceptions** (`/exceptions`): active exceptions only, with an
+  expiry countdown ("2d 3h left", or "expired"). **Open** jumps to the
+  drift record.
+
+### System health — drift scans
+
+System health (§12) has a **Drift scans** section: one row per site
+with the last scan's status, start time, devices scanned / with drift /
+failed, the count of open drift records, and the never-scanned devices
+(best-effort: scans are per site, so "scanned" means "has at least one
+drift record"; when NetBox is unavailable the list is empty and the page
+says so).
+
+## 18. Gitea setup
 
 **Route:** `/setup/gitea`. **There is no left-nav entry.** Reach it from the
 **Gitea setup** link on the Adapters page (§13).
@@ -706,7 +844,7 @@ VIREONET_GIT_REPO=netops/intent
 then restart the API and worker. See `docs/ADAPTERS.md` (Git — Gitea) for the full
 procedure, and the manual/auto choice in `README.md`.
 
-## 17. Style reference
+## 19. Style reference
 
 **Route:** `/style`. Left-nav label: **Style reference**.
 
@@ -716,9 +854,9 @@ developers, not something operators need day to day. It was not captured in the
 walkthrough; its contents are the design tokens only and it has no actions that
 change anything.
 
-## 18. Daily workflows
+## 20. Daily workflows
 
-### 18.1 Submit a change
+### 20.1 Submit a change
 
 1. Create the request in ServiceNow (a RITM). The ServiceNow webhook calls
    `POST /changes` on VireoNet.
@@ -735,7 +873,7 @@ change anything.
 5. When CI passes the change is `ci_passed` and appears on the Approvals screen
    (§10).
 
-### 18.2 Approve a change
+### 20.2 Approve a change
 
 1. Open **Approvals**. Find the change in **Awaiting approval**.
 2. Click **Show** under Evidence to review the checks, diff, and Batfish result.
@@ -745,7 +883,7 @@ change anything.
    pass — applies the change in waves (default wave size 2) with a dry-run diff
    first. Only an explicitly approved change is ever applied for real.
 
-### 18.3 Handle a failed check
+### 20.3 Handle a failed check
 
 | Failure | What it means | What to do |
 |---|---|---|
@@ -753,7 +891,7 @@ change anything.
 | `pre_check_failed` | A pre-check failed (device unreachable, lock held, no backup, neighbour baseline changed). | Read the Checks tab. If it says `device X is locked by RITM…`, wait or check Locks (§11). Fix the cause, then submit a new change. |
 | Post-check failed / wave abort | A post-check failed after apply. | The workflow rolls back automatically from the pre-change backup (AWX `rollback` playbook) and the state becomes `rolled_back`. No human action is needed. Check the AWX job output on the detail page, fix the cause, submit a new change. |
 
-### 18.4 Roll back a change manually
+### 20.4 Roll back a change manually
 
 On the change detail page (§8), while the change is `applied` or `post_checked`,
 click **Roll back** and confirm. This restores the pre-change backup via the AWX
@@ -762,7 +900,7 @@ completed waves is reverted. You can also **Abort** a change before apply
 (`received` through `pre_checked`, or `ci_passed`) — that rejects it and stops the
 workflow, and no config is applied.
 
-### 18.5 Register and bootstrap a ZTP device
+### 20.5 Register and bootstrap a ZTP device
 
 1. Register the device in NetBox (serial, model, platform, site).
 2. Call `POST /ztp/devices` (API — there is no register button in the UI). It
@@ -776,26 +914,26 @@ workflow, and no config is applied.
 5. If a device is stuck, use **Retry** or **Reset** in its row on the ZTP Devices
    screen (operator or above).
 
-### 18.6 Manage users and roles
+### 20.6 Manage users and roles
 
 Admin only, in **IAM** (§14): fill in the Create user form and click **Create user**;
 change a role with the dropdown in the users table; deactivate a user with
 **Deactivate**. You cannot deactivate yourself or the last active admin.
 
-### 18.7 Set up Gitea
+### 20.7 Set up Gitea
 
-See §16. Either follow **Show manual steps** or fill in the automatic form and click
+See §18. Either follow **Show manual steps** or fill in the automatic form and click
 **Install Gitea automatically**, then restart the API and worker with
 `VIREONET_GIT_PROVIDER=gitea`.
 
-### 18.8 Check config repos
+### 20.8 Check config repos
 
-Open **Config repos** (§15) to see which per-device repos exist and filter by
+Open **Config repos** (§16) to see which per-device repos exist and filter by
 hostname. Remember: this screen is read-only and currently shows "No commits yet"
 for every repo — that is the unimplemented history function, not proof that the
 repos are empty.
 
-## 19. Checking health
+## 21. Checking health
 
 Every day, or whenever something looks wrong:
 
@@ -813,7 +951,7 @@ Every day, or whenever something looks wrong:
    `vireonet_adapter_calls_total`, `vireonet_check_failures_total`,
    `vireonet_device_locks_held`, `vireonet_ztp_total`.
 
-## 20. Troubleshooting and FAQ
+## 22. Troubleshooting and FAQ
 
 ### I cannot log in — "Invalid username or password."
 
@@ -910,7 +1048,7 @@ the Alembic files not being in the image, the `alembic.ini` logging sections bei
 missing, and the Temporal image tag / DB driver settings. All are fixed in the
 current build; a new exit means a new error — paste the log.
 
-## 21. Glossary
+## 23. Glossary
 
 | Term | Meaning |
 |---|---|

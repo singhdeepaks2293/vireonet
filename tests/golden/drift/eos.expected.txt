@@ -1,0 +1,12 @@
+! EOS running config
+hostname eos-01
+!
+interface Ethernet1
+ description PEER-A-CHANGED
+ no shutdown
+!
+interface Ethernet2
+ description peer-b
+ no shutdown
+!
+end

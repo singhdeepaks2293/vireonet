@@ -24,6 +24,8 @@ dependencies = [
     "prometheus-client>=0.20",
     "PyJWT>=2.8",
     "passlib[bcrypt]>=1.7.4",
+    "ciscoconfparse>=1.9",
+    "asyncssh>=2.14",  # Containerlab adapter drives the CLI over SSH (E4)
 ]
 
 [project.optional-dependencies]

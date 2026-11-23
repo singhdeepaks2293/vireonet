@@ -104,6 +104,58 @@ export default function ChangeDetail() {
       {actionError ? <p className="text-sm text-danger" role="alert">{actionError}</p> : null}
       {actionDone ? <p className="text-sm">{actionDone}</p> : null}
 
+      <h3 className="text-sm mb-2">Execution</h3>
+      <div className="mb-4">
+        <table aria-label="Execution">
+          <thead><tr><th>Item</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>Job type</td><td className="mono">{data.job_type ?? "playbook"}</td></tr>
+            <tr>
+              <td>AWX job</td>
+              <td>
+                {data.awx_job_id != null ? (
+                  data.awx_job_url ? (
+                    <a href={data.awx_job_url} target="_blank" rel="noreferrer" className="mono underline">{data.awx_job_id}</a>
+                  ) : (
+                    <span className="mono">{data.awx_job_id}</span>
+                  )
+                ) : "—"}
+              </td>
+            </tr>
+            {data.script_name ? (
+              <tr><td>Script</td><td><span className="mono">{data.script_name}</span>{data.script_sha ? <span className="mono text-text-muted"> @ {data.script_sha.slice(0, 12)}</span> : null}</td></tr>
+            ) : null}
+            <tr>
+              <td>Reconciliation</td>
+              <td>
+                {data.reconciliation_status ?? "—"}
+                {data.reconciliation_status === "reconciliation_pending" && data.drift_count != null && data.drift_count > 0 ? (
+                  <span className="text-text-muted"> · {data.drift_count} drift record{data.drift_count === 1 ? "" : "s"} — an approver override is required before close.</span>
+                ) : null}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        {data.declared_changes && data.declared_changes.length > 0 ? (
+          <table aria-label="Declared changes" className="mt-2">
+            <thead><tr><th>Object</th><th>Identifier</th><th>Field</th><th>Old</th><th>New</th></tr></thead>
+            <tbody>
+              {data.declared_changes.map((c, i) => (
+                <tr key={i}>
+                  <td className="mono">{c.object_type}</td>
+                  <td className="mono">{c.identifier}</td>
+                  <td className="mono">{c.field}</td>
+                  <td className="mono">{c.old_value || "—"}</td>
+                  <td className="mono">{c.new_value || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="text-sm text-text-muted mt-2">No declared changes recorded for this change.</p>
+        )}
+      </div>
+
       <div className="flex gap-1 border-b border-border mb-4" role="tablist" aria-label="Change detail tabs">
         {TABS.map((t) => (
           <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)} className={`px-2 py-1 text-sm border-b-2 ${tab === t.id ? "border-accent text-text" : "border-transparent text-text-muted"}`}>

@@ -22,6 +22,7 @@
 - [5. Batfish](#5-batfish)
 - [6. Vault](#6-vault)
 - [7. EVE-NG](#7-eve-ng)
+- [7a. Containerlab](#7a-containerlab)
 - [8. DHCP (ISC / Kea) and ZTP](#8-dhcp-isc--kea-and-ztp)
 - [9. Notification (SMTP / Teams / Slack)](#9-notification-smtp--teams--slack)
 - [10. Monitoring (none / Alertmanager / LibreNMS)](#10-monitoring-none--alertmanager--librenms)
@@ -68,7 +69,7 @@ VIREONET_ADAPTER_MODE=real   # real adapters, built from the env vars in this gu
 
 In `fake` mode every adapter's `health_check()` returns `ok` unconditionally, and the UI shows seeded fake data (ServiceNow `RITM0001234` "Add VLAN 100" / `alice`; NetBox `leaf-01` `FOC1234A` C9300-48P `dc1` active, `leaf-02` staged; VLAN 100 "web"; AWX templates `backup`, `pre-check`, `dry-run`, `apply`, `post-check`, `rollback`). That is demo/test data, not your network. In `real` mode the same screens are empty until a real request creates a change, and a health status of `down` means the real system really is unreachable.
 
-Note the switch is **global and all-or-nothing**: `registry.py` builds the real set for ServiceNow, NetBox, AWX, Vault, GitLab, Batfish, EVE-NG, Notification and Monitoring when the mode is `real`. There is no per-adapter fake/real mix in the shipped code. `recorded` is declared as a valid mode in `config.py` but `build_adapters()` raises `AdapterUnavailable` for it — do not use it.
+Note the switch is **global and all-or-nothing**: `registry.py` builds the real set for ServiceNow, NetBox, AWX, Vault, GitLab, Batfish, Notification and Monitoring when the mode is `real`, and the lab backend(s) selected by `VIREONET_LAB_BACKEND` (`eveng` | `containerlab` | `both`, default `eveng`; see §7/§7a). There is no per-adapter fake/real mix in the shipped code. `recorded` is declared as a valid mode in `config.py` but `build_adapters()` raises `AdapterUnavailable` for it — do not use it.
 
 Shared tuning (applies to all real adapters):
 
@@ -212,6 +213,12 @@ VIREONET_AWX_TOKEN=<from Vault / env>
 ```
 
 **How it is used:** launch is `POST /api/v2/job_templates/<id>/launch/` with `{"extra_vars": {...}, "limit": ...}`; workflows via `/api/v2/workflow_job_templates/<id>/launch/`; polling is `GET /api/v2/jobs/<id>/`, events `/api/v2/jobs/<id>/job_events/`, stdout from the job events. Job statuses are mapped (`new/pending/waiting → pending`, `successful → successful`, `failed/error → failed`, `canceled/cancelled → canceled`); unknown statuses pass through unchanged. Health check is `GET /api/v2/ping/`.
+
+**Execution Environment (E5):** device sessions run only inside the AWX Execution Environment. The EE is built from `ansible/execution-environment/` (`ansible-builder build -t vireonet-ee:latest`, base image `quay.io/ansible/ansible-runner:latest`, ansible-core 2.17.7, `cisco.ios` / `cisco.nxos` / `ansible.netcommon` collections) and registered in AWX as **VireoNet EE** (`VIREONET_AWX_EXECUTION_ENVIRONMENT`, default `VireoNet EE`). In `ansible/awx/job_templates.yaml` only the `run-python` template declares `execution_environment: VireoNet EE`. **Honest limit:** VireoNet cannot verify from the AWX API that the EE is actually registered on the job templates, so `GET /system/health` reports the EE status as `unknown` — verify it in AWX (Job Templates → Execution Environment) rather than trusting the health page.
+
+**Python runners (E2):** job_type `python` runs the `run-python` template (`ansible/playbooks/run_python.yml`), which executes a Python runner from the `vireonet_runners` package inside the EE (`python -m vireonet_runners.runners <step>`, request JSON on stdin, `VIREONET-RESULT` JSON on stdout, result also exposed via `set_stats` as `vireonet_result`). Only scripts listed in `policies/scripts.yaml` at the listed SHA may run (see `docs/SCRIPTS.md`).
+
+**Credential type:** no AWX credential is declared in `ansible/awx/job_templates.yaml` — the templates carry no credential reference. Attach the AWX Machine credential that can log in to the devices to each job template in AWX. Device credentials are never passed in `extra_vars` (the engine rejects any key containing `secret`, `token`, `password`, `private_key` or `api_key`); the API token for AWX itself is a Bearer token (`VIREONET_AWX_TOKEN`), held in Vault or the environment.
 
 **Capabilities:** `launch_job`, `launch_workflow`, `poll_job`, `job_events`, `cancel`, `relaunch`, `templates`, `approvals`, `sync`.
 
@@ -470,6 +477,41 @@ VIREONET_EVENG_PASSWORD=<from Vault / env>
 **UNCERTAIN:** loading a `.unl` topology has no single stable REST call in the code — the implementation is best-effort and version-sensitive. Treat EVE-NG as a manual verification step, not a hard gate, until it has been run against your EVE-NG version.
 
 **Fake-mode behaviour:** `start_lab` returns a lab `lab-<name>` in state `running` with nodes `leaf-01`, `leaf-02`; nothing is created anywhere.
+
+---
+
+## 7a. Containerlab
+
+**What it does in VireoNet:** a second lab backend alongside EVE-NG (E4), not a replacement. It deploys a containerlab topology on a lab host and runs commands on its nodes, for lab validation where containers are cheaper than EVE-NG VMs. Selected with `VIREONET_LAB_BACKEND=containerlab` (or `both` to expose both backends); see `docs/LAB.md` and `topologies/README.md`.
+
+**Prerequisites:** a lab host with the `containerlab` CLI installed and the node images available (or pullable); SSH access to that host as `VIREONET_CONTAINERLAB_USER`, with a key (`VIREONET_CONTAINERLAB_KEY_PATH`) or password (`VIREONET_CONTAINERLAB_PASSWORD`). No containerlab daemon or API is needed on the host.
+
+**Auth:** SSH, key or password. No secret is ever logged; the SSH command contains only containerlab arguments.
+
+```bash
+VIREONET_LAB_BACKEND=containerlab
+VIREONET_CONTAINERLAB_HOST=lab.example.com
+VIREONET_CONTAINERLAB_USER=lab
+VIREONET_CONTAINERLAB_KEY_PATH=~/.ssh/lab_id_ed25519
+```
+
+**How it is used:** every operation is one CLI call over SSH (`src/vireonet/adapters/containerlab.py: _run_cli`): `deploy -t <topology>`, `inspect --name <lab> --format json`, `exec --name <lab> --label clab-node-name=<node> --cmd <command>`, `destroy --name <lab> --cleanup`. `save_config` runs `show running-config` via exec. `wait_ready` polls inspect until every node reports `state: running` (default timeout 600 s).
+
+**Capabilities:** `deploy`, `inspect`, `exec`, `save_config`, `destroy`.
+
+**Verify:** run `python scripts/lab_smoke.py --backend containerlab --topology topologies/two-leaf.clab.yml --lab two-leaf` (deploys, waits, runs `show version`, destroys in a `finally`); or `GET /system/health` → `Containerlab` ok.
+
+**Common failures:**
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `containerlab backend needs VIREONET_CONTAINERLAB_HOST and VIREONET_CONTAINERLAB_USER` | Host/user not set | Set both vars (startup refuses without them in real mode) |
+| `ssh to <host> failed` | Host unreachable, bad key/password, or host key not in known_hosts | Check SSH from the API host with the same key/user |
+| `containerlab … cli: <stderr>` | The CLI itself failed (bad topology, missing image, lab name clash) | Read the stderr (first 500 chars are in the error); fix the topology or pull the image on the lab host |
+
+**UNCERTAIN:** no stable Containerlab REST API is known, so the CLI is the interface — `_run_cli` is the one place that knows about it. `inspect --format json` is parsed in both shapes seen in the wild (`{"containers": [...]}` and a top-level list). `restore_config` is deliberately unimplemented: restore is kind-specific (cisco_iol, srl, ceos, crpd all differ) and no generic restore is invented. Old IOS images on Containerlab are kind-dependent — only `cisco_iol` (vrnetlab) is known to run old IOS; see `topologies/README.md`.
+
+**Fake-mode behaviour:** `deploy` returns the lab name with nodes `leaf-01`/`leaf-02` (`cisco_iol`, running, `10.0.1.11`/`10.0.1.12`); `exec` returns fake device output; nothing is created anywhere.
 
 ---
 

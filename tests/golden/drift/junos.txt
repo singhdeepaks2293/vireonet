@@ -1,0 +1,16 @@
+## Last commit: 2026-11-23 12:00:00 UTC by admin
+# Last commit 2026-11-23 12:00:00 UTC
+version 21.2R3;
+system {
+    host-name junos-01;
+}
+interfaces {
+    ge-0/0/1 {
+        description "UPLINK-CHANGED";
+        unit 0 {
+            family inet {
+                address 10.0.0.1/24;
+            }
+        }
+    }
+}

@@ -98,6 +98,34 @@ class DeviceRepoManager:
         )
         return str(result.sha)
 
+    async def commit_config(
+        self,
+        *,
+        hostname: str,
+        ticket_number: str,
+        content: str,
+        message: str,
+    ) -> str:
+        """Commit a running config to the device repo (E3 reconcile).
+
+        One branch per ticket (``reconcile/<ticket>``), one commit of the
+        backup path, then an MR — the same shape as commit_backup, but the
+        caller supplies the message (reconcile messages name the job and
+        the script that produced the config).
+        """
+        repo = await self.ensure_repo(hostname)
+        git = self._factory(repo)
+        branch = f"reconcile/{ticket_number}"
+        await git.create_branch(branch, "main")
+        result = await git.commit_file(branch, device_paths(hostname)["backup"], content, message)
+        await git.open_mr(
+            source_branch=branch,
+            target_branch="main",
+            title=message,
+            description=f"Reconciled running config for {hostname}.",
+        )
+        return str(result.sha)
+
     async def get_rendered(self, hostname: str, ref: str = "main") -> str:
         git = self._factory(device_repo(hostname))
         return str((await git.get_file(device_paths(hostname)["rendered"], ref)).content)

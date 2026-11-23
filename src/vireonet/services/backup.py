@@ -1,5 +1,6 @@
-"""Backup collection: run the AWX backup template, extract the running config
-from its stdout, store it, and diff it against the candidate config (F1).
+"""Backup collection: run the backup step through the execution engine,
+extract the running config from its stdout, store it, and diff it against
+the candidate config (F1).
 
 Contract with ansible/playbooks/backup.yml: the playbook prints the config
 between the VIREONET-BACKUP-BEGIN / VIREONET-BACKUP-END markers, and this
@@ -10,19 +11,21 @@ from __future__ import annotations
 
 import re
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from vireonet.adapters.protocols import AwxProtocol
 from vireonet.config_store.store import ConfigStore
 from vireonet.diff import apply_intent_to_config
+from vireonet.execution.awx_engine import AwxEngine
+from vireonet.execution.engine import ExecutionEngine
+from vireonet.execution.mapping import ExecutionMapping
+from vireonet.execution.types import DeviceRef, StepRequest
 from vireonet.models import DeviceConfigVersion
 
 BEGIN_MARKER = "VIREONET-BACKUP-BEGIN"
 END_MARKER = "VIREONET-BACKUP-END"
 
 _MARKER_RE = re.compile(r"VIREONET-BACKUP-BEGIN\s*(.*?)\s*VIREONET-BACKUP-END", re.DOTALL)
-
-_TERMINAL_STATUSES = {"successful", "failed", "canceled"}
 
 
 def extract_running_config(stdout: str) -> str:
@@ -40,26 +43,42 @@ def extract_running_config(stdout: str) -> str:
 
 
 class BackupService:
-    def __init__(self, awx: AwxProtocol, store: ConfigStore) -> None:
-        self._awx = awx
+    """Collects backups through an ExecutionEngine.
+
+    The constructor accepts an engine directly, or — as a migration shim
+    for existing call sites and tests — a raw AwxProtocol adapter, which is
+    wrapped in an AwxEngine with the default execution mapping.
+    """
+
+    def __init__(self, engine: ExecutionEngine | AwxProtocol, store: ConfigStore) -> None:
+        backup = getattr(engine, "backup", None)
+        if callable(backup):
+            self._engine: ExecutionEngine = cast(ExecutionEngine, engine)
+        else:
+            try:
+                mapping = ExecutionMapping.from_yaml("policies/execution.yaml")
+            except (OSError, ValueError):
+                mapping = ExecutionMapping.default()
+            self._engine = AwxEngine(engine, mapping)  # type: ignore[arg-type]
         self._store = store
 
     async def collect(self, device: str, ticket_number: str) -> DeviceConfigVersion:
-        job = await self._awx.launch_job("backup", {"ticket": ticket_number}, limit=device)
-        # poll_job / get_job_stdout exist on the real AWX adapter but are not
-        # part of AwxProtocol (and the fake has neither); same getattr pattern
-        # as temporal/activities.py.
-        poll = getattr(self._awx, "poll_job", None)
-        if poll is not None and job.status not in _TERMINAL_STATUSES:
-            job = await poll(job.id, timeout_seconds=600)
-        if job.status != "successful":
-            raise ValueError(f"backup job {job.id} for {device} ended with status {job.status}")
-        get_stdout = getattr(self._awx, "get_job_stdout", None)
-        if get_stdout is None:
-            raise ValueError(
-                "awx adapter does not expose get_job_stdout; cannot read backup output"
+        result = await self._engine.backup(
+            StepRequest(
+                ticket_number=ticket_number,
+                device=DeviceRef(name=device),
+                step="backup",
+                dry_run=True,
+                correlation_id=ticket_number,
             )
-        stdout = await get_stdout(job.id)
+        )
+        if not result.ok:
+            raise ValueError(
+                f"backup job {result.job_id} for {device} ended with status {result.status.value}"
+            )
+        stdout = str(result.output.get("stdout") or result.output.get("stdout_tail") or "")
+        if not stdout:
+            raise ValueError("backup produced no stdout; cannot read backup output")
         config = extract_running_config(stdout)
         return await self._store.store_running(device, config, ticket_number=ticket_number)
 

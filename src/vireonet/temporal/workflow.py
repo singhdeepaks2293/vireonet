@@ -12,6 +12,7 @@ with workflow.unsafe.imports_passed_through():
         CheckInput,
         CloseInput,
         PlanInput,
+        ReconcileInput,
         RollbackInput,
         TransitionInput,
         ValidateInput,
@@ -126,13 +127,40 @@ class ChangeWorkflow:
             await self._rollback(inp, post)
             return "rolled_back"
         await self._transition(inp, "post_checked", "post-check passed", post)
-        # 8. Close.
+        # 8. Reconcile (E3): Git + NetBox must match the device. A failed
+        # post_check above rolled back instead, so reconcile never runs
+        # for a failed change and writes nothing for one.
+        await self._transition(inp, "reconciling", "reconciling Git/NetBox", {})
+        try:
+            recon = await workflow.execute_activity(
+                "reconcile_change",
+                ReconcileInput(change_id=inp.change_id, intent=inp.intent),
+                start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=retry_policy(),
+            )
+        except Exception as exc:  # noqa: BLE001 — an unexpected reconcile error fails the change, it does not close it
+            log.warning("reconcile failed", error=str(exc))
+            await self._transition(inp, "failed", f"reconcile failed: {exc}", {})
+            return "failed"
+        if recon.get("status") == "reconciliation_pending":
+            await self._transition(inp, "reconciliation_pending", "reconciliation pending", recon)
+            return "reconciliation_pending"
+        if not recon.get("ok", False):
+            await self._transition(inp, "failed", "reconcile failed", recon)
+            return "failed"
+        await self._transition(inp, "reconciled", "reconciled", recon)
+        # 9. Close.
         closed = await workflow.execute_activity(
             "close_change",
             CloseInput(change_id=inp.change_id, intent=inp.intent),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=retry_policy(),
         )
+        if not closed.get("ok", True):
+            # Close refuses a reconciliation_pending change; the workflow
+            # only reaches here from reconciled, so this is a safety net.
+            await self._transition(inp, "failed", "close refused", closed)
+            return "failed"
         await self._transition(inp, "closed", "change closed", closed)
         return "closed"
 

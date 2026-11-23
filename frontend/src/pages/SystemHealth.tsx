@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { useAdaptersHealth, useSystemHealth } from "../lib/api";
+import { useDriftSummary } from "../api/drift";
 import type { AdapterHealth } from "../lib/api-types";
 import { Button } from "../components/ui/Button";
 import { DataTable } from "../components/ui/DataTable";
@@ -22,6 +23,7 @@ export default function SystemHealth() {
   const [density, setDensity] = useState<"comfortable" | "compact">(() => (localStorage.getItem("vireonet-density") as "comfortable" | "compact" | null) ?? "comfortable");
   const system = useSystemHealth();
   const adapters = useAdaptersHealth();
+  const drift = useDriftSummary();
 
   const columns = useMemo<ColumnDef<AdapterHealth>[]>(() => [
     { accessorKey: "name", header: "Adapter", size: 140, cell: ({ row }) => <span className="mono">{row.original.name}</span> },
@@ -70,6 +72,93 @@ export default function SystemHealth() {
               ))}
             </tbody>
           </table>
+        </div>
+      ) : null}
+
+      <h3 className="text-sm mb-2">AWX and Execution Environment</h3>
+      {!system.isLoading && !system.isError && system.data ? (
+        <div className="mb-4">
+          <table aria-label="AWX and Execution Environment">
+            <thead><tr><th>Item</th><th>Status</th><th>Detail</th></tr></thead>
+            <tbody>
+              {system.data.awx ? (
+                <tr>
+                  <td className="mono">awx</td>
+                  <td>{statusBadge(system.data.awx.status)}</td>
+                  <td>{system.data.awx.detail}</td>
+                </tr>
+              ) : (
+                <tr><td className="mono">awx</td><td>{statusBadge("unknown")}</td><td>No AWX status reported.</td></tr>
+              )}
+              {system.data.execution_environment ? (
+                <tr>
+                  <td className="mono">execution environment: {system.data.execution_environment.name}</td>
+                  <td>{statusBadge(system.data.execution_environment.status)}</td>
+                  <td>{system.data.execution_environment.detail}</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      <h3 className="text-sm mb-2">Lab backends</h3>
+      {!system.isLoading && !system.isError && system.data ? (
+        system.data.lab_backends && system.data.lab_backends.length > 0 ? (
+          <div className="mb-4">
+            <table aria-label="Lab backends">
+              <thead><tr><th>Backend</th><th>Status</th><th>Capabilities</th><th>Detail</th></tr></thead>
+              <tbody>
+                {system.data.lab_backends.map((b) => (
+                  <tr key={b.name}>
+                    <td className="mono">{b.name}</td>
+                    <td>{statusBadge(b.status)}</td>
+                    <td>{(b.capabilities ?? []).join(", ") || "—"}</td>
+                    <td>{b.detail || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-sm text-text-muted mb-4">No lab backends enabled.</p>
+        )
+      ) : null}
+
+      <h3 className="text-sm mb-2">Drift scans</h3>
+      {drift.isLoading ? <p className="text-sm">Loading drift summary…</p> : null}
+      {drift.isError ? (
+        <div>
+          <p className="text-sm text-danger" role="alert">Failed to load drift summary: {(drift.error as Error).message}</p>
+          <Button variant="secondary" onClick={() => drift.refetch()}>Retry</Button>
+        </div>
+      ) : null}
+      {!drift.isLoading && !drift.isError && drift.data ? (
+        <div className="mb-4">
+          <p className="text-sm mb-2">{drift.data.total_open} open drift record{drift.data.total_open === 1 ? "" : "s"}.</p>
+          {drift.data.last_scan_per_site.length > 0 ? (
+            <table aria-label="Last drift scan per site">
+              <thead><tr><th>Site</th><th>Status</th><th>Started</th><th>Scanned</th><th>With drift</th><th>Failed</th></tr></thead>
+              <tbody>
+                {drift.data.last_scan_per_site.map((s) => (
+                  <tr key={s.site}>
+                    <td className="mono">{s.site}</td>
+                    <td>{s.status ?? "—"}</td>
+                    <td>{s.started_at ? new Date(s.started_at).toLocaleString() : "—"}</td>
+                    <td>{s.devices_scanned}</td>
+                    <td>{s.devices_with_drift}</td>
+                    <td>{s.devices_failed}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="text-sm text-text-muted mb-2">No drift scan has run yet.</p>
+          )}
+          <p className="text-sm text-text-muted">
+            Never-scanned devices: {drift.data.never_scanned_devices.length > 0 ? drift.data.never_scanned_devices.join(", ") : "none"}
+            {drift.data.never_scanned_best_effort ? " (best-effort: NetBox device list unavailable, so this is the scanned-device list only)" : ""}
+          </p>
         </div>
       ) : null}
 

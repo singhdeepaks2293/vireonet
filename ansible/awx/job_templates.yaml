@@ -41,6 +41,13 @@ job_templates:
     inventory: NetBox
     project: VireoNet
     playbook: ansible/playbooks/ztp_day1.yml
+  - name: run-python
+    job_type: run
+    inventory: NetBox
+    project: VireoNet
+    playbook: ansible/playbooks/run_python.yml
+    execution_environment: VireoNet EE
+    ask_variables_on_launch: true
   - name: dhcp-reload
     job_type: run
     inventory: NetBox

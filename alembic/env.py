@@ -9,6 +9,7 @@ from alembic import context
 from vireonet import models  # noqa: F401  (import registers tables)
 from vireonet.config import get_settings
 from vireonet.db import Base
+from vireonet.drift import models as drift_models  # noqa: F401  (registers drift tables)
 
 config = context.config
 # alembic.ini in this repo has no [loggers]/[formatters] sections

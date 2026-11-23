@@ -1,0 +1,13 @@
+!Command: show running-config
+!Running configuration last done at: Mon Nov 23 12:00:00 2026
+hostname leaf-02
+!
+interface Ethernet1/1
+ description SERVER-A-CHANGED
+ no shutdown
+!
+interface Ethernet1/2
+ description server-b
+ no shutdown
+!
+end

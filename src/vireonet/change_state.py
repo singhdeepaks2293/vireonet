@@ -18,6 +18,9 @@ class ChangeState(StrEnum):
     PRE_CHECKED = "pre_checked"
     APPLIED = "applied"
     POST_CHECKED = "post_checked"
+    RECONCILING = "reconciling"
+    RECONCILIATION_PENDING = "reconciliation_pending"
+    RECONCILED = "reconciled"
     CLOSED = "closed"
     # Failure exits (terminal)
     REJECTED = "rejected"

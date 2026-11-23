@@ -1,9 +1,17 @@
 # VireoNet Lab Guide — End-to-End Test (F5)
 
-`scripts/lab_e2e.py` runs the two lab flows against **real** systems and
+`scripts/lab_e2e.py` runs the three lab flows against **real** systems and
 prints one `PASS`/`FAIL` line per stage. It is the only script that drives a
 change and a ZTP device end to end; `scripts/eveng_smoke.py` only starts an
-EVE-NG lab and wipes it.
+EVE-NG lab and wipes it, and `scripts/lab_smoke.py --backend eveng|containerlab`
+is the backend-agnostic version of that smoke test (deploy → wait ready →
+`show version` → destroy in a `finally`).
+
+The lab has **two backends** (E4): EVE-NG (`.unl` topology, qemu VMs) and
+Containerlab (`.clab.yml` topology, containers). They are selected with
+`VIREONET_LAB_BACKEND=eveng|containerlab|both` (default `eveng`); `both`
+exposes both under `lab:eveng` / `lab:containerlab`. See
+`topologies/README.md` for node kinds and images per backend.
 
 > **Never run this against production.** Flow A creates a real change
 > (ticket `RITM-LAB-001`) and a real VLAN 100 on `leaf-01`/`leaf-02`.
@@ -16,13 +24,59 @@ EVE-NG lab and wipes it.
   Batfish CI gate → human approval → AWX apply → post-check → closed.
 - **Flow B — ZTP:** device registration → DHCP reservation → one-time-token
   callback → identity check → day-1 config push → active in NetBox.
+- **Flow C — Drift (D6):** manual change on `leaf-01` → scan detects drift →
+  rollback resolves it → change again → merge (MR created, merged via the
+  mr-merged endpoint, which simulates the Git webhook; baseline updated) →
+  change a third time → exception (re-scan finds nothing new for the
+  excepted diff; a *different* change creates a new record) → the Flow A
+  change is checked for reconciliation into Git and NetBox. Run it alone
+  with `--only drift`; it needs Flow A to have run for the last stage
+  (otherwise that stage fails with "Flow A did not run").
+
+## Lab backend selection
+
+`scripts/lab_e2e.py --backend eveng|containerlab` (default:
+`VIREONET_LAB_BACKEND`, default `eveng`). The backend is built through
+the registry (`lab_adapter_for`, the same call `scripts/lab_smoke.py`
+uses). The topology default follows the backend: `topologies/two-leaf.unl`
+for EVE-NG, `topologies/two-leaf.clab.yml` for Containerlab. The lab is
+deployed with `deploy`, waited on with `wait_ready`, and always destroyed
+with `destroy` in a `finally` (unless `--no-cleanup`).
+
+### Device images per backend (old Cisco ZTP case)
+
+| Backend | Image needed for the old Cisco ZTP case |
+|---|---|
+| EVE-NG | IOSvL2 qcow2 (`vios_l2-adventerprisek9-m.qcow2`) — the `.unl` topology references the IOSvL2 image installed on the EVE-NG host. |
+| Containerlab | `vrnetlab/cisco_iol:latest` container image (kind `cisco_iol` in `topologies/two-leaf.clab.yml`). |
+
+Old IOS images are EVE-NG-only as far as known: only `cisco_iol` is
+known to run old IOS on Containerlab, and that is kind-dependent
+(UNCERTAIN) — see `topologies/README.md` for the other kinds (`srl`,
+`ceos`, `crpd`). The drift stages' manual change is IOS CLI text sent
+to the node console (EVE-NG telnet) or via `containerlab exec`
+(Containerlab); whether the exec channel reaches the `cisco_iol` CLI
+directly is UNCERTAIN — if the drift stages fail on Containerlab at
+the exec step, run the same commands on the node console by hand and
+re-run with `--only drift`.
+
+### Python-job change note
+
+There is no API trigger for a python-runner change: the change intent
+forbids extra keys (so `job_type` cannot be set on `POST /changes`),
+the workflow hardcodes `job_type="playbook"`, and `ScriptRunner` is
+library-only (E3). The lab therefore checks reconciliation for the
+Flow A change and documents the gap in the stage output; the python
+reconciliation path is covered by `tests/test_e3_scripts.py`, not by
+this script.
 
 ## Prerequisites
 
 | Requirement | Detail |
 |---|---|
 | VireoNet in real mode | `VIREONET_ADAPTER_MODE=real`; API, worker, Temporal, and Postgres up. Fake mode is refused (exit 2). |
-| EVE-NG | Reachable at `VIREONET_EVENG_BASE_URL`, with IOSvL2 images for `leaf-01` and `leaf-02`. Import `topologies/two-leaf.unl` (see note below). |
+| EVE-NG | Reachable at `VIREONET_EVENG_BASE_URL`, with IOSvL2 images for `leaf-01` and `leaf-02`. Import `topologies/two-leaf.unl` (see note below). Only needed when `VIREONET_LAB_BACKEND` includes `eveng`. |
+| Containerlab | Lab host reachable over SSH at `VIREONET_CONTAINERLAB_HOST` as `VIREONET_CONTAINERLAB_USER` (key or password), with the `containerlab` CLI and the `vrnetlab/cisco_iol:latest` image. Topology `topologies/two-leaf.clab.yml`. Only needed when `VIREONET_LAB_BACKEND` includes `containerlab`. |
 | NetBox | Devices `leaf-01` and `leaf-02` exist at site `dc1`, with `GigabitEthernet0/1` interfaces. `leaf-99` (serial `FOC9999A`, model `C9300-48P`) must exist or be creatable for Flow B. |
 | AWX | Job templates imported from `ansible/awx/job_templates.yaml`: `backup`, `pre-check`, `dry-run`, `apply`, `post-check`, `rollback`, `dhcp-reload`, `ztp-day1`. Inventory `NetBox`, project `VireoNet`. |
 | Gitea | Repo `netops/intent` (`VIREONET_GIT_REPO=netops/intent`) reachable; intent configs land here. |
@@ -38,6 +92,19 @@ the EVE-NG UI (Lab → Import) before running the test, and check the
 `image` attribute in the file matches the IOSvL2 image installed on your
 EVE-NG host — image names differ between installs. The lab the script
 starts must already contain the `leaf-01`/`leaf-02` nodes.
+
+### Containerlab topology
+
+`topologies/two-leaf.clab.yml` is the same two-leaf lab for Containerlab:
+nodes `leaf-01`/`leaf-02`, kind `cisco_iol`, image
+`vrnetlab/cisco_iol:latest`, mgmt IPs `10.0.1.11`/`10.0.1.12`, link
+`leaf-01:eth1 <-> leaf-02:eth1`. Containerlab deploys it directly from the
+file (`containerlab deploy -t topologies/two-leaf.clab.yml`) — no UI import
+step. **Images each backend needs:** EVE-NG needs the IOSvL2 qemu image
+(`vios_l2-adventerprisek9-m.qcow2`); Containerlab needs the
+`vrnetlab/cisco_iol:latest` container image. Old IOS on Containerlab is
+kind-dependent (UNCERTAIN) — only `cisco_iol` is known to run old IOS; see
+`topologies/README.md` for the other kinds (`srl`, `ceos`, `crpd`).
 
 ## Environment
 
@@ -64,6 +131,10 @@ Bearer` header and never logs it.
 # Both flows (default)
 VIREONET_API_URL=http://localhost:8000 VIREONET_API_TOKEN=<token> \
   python scripts/lab_e2e.py --lab f5-lab
+
+# Lab smoke test, either backend (deploy -> wait ready -> show version -> destroy)
+python scripts/lab_smoke.py --backend eveng --topology topologies/two-leaf.unl --lab two-leaf
+python scripts/lab_smoke.py --backend containerlab --topology topologies/two-leaf.clab.yml --lab two-leaf
 
 # Flow A only
 python scripts/lab_e2e.py --lab f5-lab --only vlan
@@ -189,6 +260,12 @@ changes `rejected`, `ci_failed`, `pre_check_failed`, `failed`,
   `src/vireonet/adapters/base.py`), so the mode check uses
   `GET /adapters/settings` and health uses `GET /adapters/health`.
 - **`.unl` import may need the EVE-NG UI** — see the note above.
+- **Containerlab is CLI-driven (E4 caveat):** there is no stable Containerlab
+  REST API known to this project, so the adapter shells out to the
+  `containerlab` CLI over SSH; if the CLI's output shape changes, only
+  `_run_cli` / `inspect` parsing needs to change. `restore_config` is
+  unimplemented on purpose (kind-specific), and old IOS on Containerlab is
+  kind-dependent.
 - The script is **not** run live in the sandbox (no EVE-NG, NetBox, AWX,
   or Gitea there). Its stage logic is unit-tested with mocked API calls
   in `tests/test_f5_lab_smoke.py`.

@@ -1,0 +1,23 @@
+# VireoNet execution environment (ansible-builder v3).
+# Build: ansible-builder build -t vireonet-ee:latest
+# Push to your registry, then register it in AWX as "VireoNet EE".
+version: 3
+images:
+  base_image:
+    name: quay.io/ansible/ansible-runner:latest
+dependencies:
+  ansible_core:
+    package_pip: ansible-core==2.17.7
+  ansible_runner:
+    package_pip: ansible-runner==2.4.0
+  python:
+    - requirements.txt
+  galaxy:
+    - requirements.yml
+  system:
+    - bindep.txt
+additional_build_steps:
+  append_base:
+    # The python runners (vireonet_runners) ride inside the EE so the
+    # run_python playbook can execute them with `python -m`.
+    - RUN pip install -e /runner-lib

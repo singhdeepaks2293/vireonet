@@ -17,15 +17,29 @@ from vireonet.adapters.protocols import (
 )
 from vireonet.checks.base import CheckContext, CheckEngine
 from vireonet.checks.plugins import post_checks_for, pre_checks_for
+from vireonet.execution.awx_engine import AwxEngine
+from vireonet.execution.engine import ExecutionEngine
+from vireonet.execution.mapping import ExecutionMapping
+from vireonet.execution.types import DeviceRef, StepName, StepRequest
 from vireonet.intent import parse_intent
 from vireonet.models import Change
 from vireonet.notifications import NotificationService
 from vireonet.observability import record_change, record_check_failure
 from vireonet.planner import plan as make_plan
 from vireonet.policy import PolicyEngine
+from vireonet.reconciliation.service import ReconciliationService
 from vireonet.safety import DeviceLockService, LockHeldError, run_waves
 from vireonet.state_machine import ChangeState, record_transition
 from vireonet.validation import validate_intent
+
+
+def _default_engine(awx: AwxProtocol) -> ExecutionEngine:
+    """Engine over a raw AWX adapter, using the repo mapping when present."""
+    try:
+        mapping = ExecutionMapping.from_yaml("policies/execution.yaml")
+    except (OSError, ValueError):
+        mapping = ExecutionMapping.default()
+    return AwxEngine(awx, mapping)
 
 
 @dataclass
@@ -69,6 +83,12 @@ class CloseInput:
 
 
 @dataclass
+class ReconcileInput:
+    change_id: str
+    intent: dict[str, Any]
+
+
+@dataclass
 class RollbackInput:
     change_id: str
     intent: dict[str, Any]
@@ -90,11 +110,15 @@ class ChangeActivities:
         notification: NotificationProtocol | None = None,
         monitoring: MonitoringProtocol | None = None,
         monitoring_silence_minutes: int = 60,
+        engine: ExecutionEngine | None = None,
+        reconciliation: ReconciliationService | None = None,
     ) -> None:
         self._sessions = session_factory
         self._snow = servicenow
         self._netbox = netbox
         self._awx = awx
+        self._engine = engine if engine is not None else _default_engine(awx)
+        self._reconciliation = reconciliation
         self._policy = policy
         self._locks = DeviceLockService(session_factory, ttl_seconds=lock_ttl_seconds)
         self._wave_size = wave_size
@@ -141,15 +165,47 @@ class ChangeActivities:
             raise ValueError(f"change {change_id} not found")
         return change
 
-    async def _launch_and_poll(
-        self, template: str, extra_vars: dict[str, str], limit: str | None = None
-    ) -> dict[str, Any]:
-        job = await self._awx.launch_job(template, extra_vars, limit=limit)
-        # Fake AWX returns successful immediately; Real AWX polls via poll_job if present.
-        poll = getattr(self._awx, "poll_job", None)
-        if poll is not None and job.status not in {"successful", "failed", "canceled"}:
-            job = await poll(job.id, timeout_seconds=600)
-        return {"job_id": job.id, "status": job.status, "ok": job.status == "successful"}
+    async def _run_step(self, req: StepRequest) -> dict[str, Any]:
+        """Run one engine step. Return shape matches the old _launch_and_poll:
+        {job_id, status, ok} plus duration_seconds and evidence."""
+        method = {
+            "backup": self._engine.backup,
+            "pre_check": self._engine.pre_check,
+            "dry_run": self._engine.dry_run,
+            "apply": self._engine.apply,
+            "post_check": self._engine.post_check,
+            "rollback": self._engine.rollback,
+            "collect_state": self._engine.collect_state,
+        }[req.step]
+        result = await method(req)
+        return {
+            "job_id": result.job_id,
+            "status": result.status.value,
+            "ok": result.ok,
+            "duration_seconds": result.duration_seconds,
+            "evidence": result.evidence,
+        }
+
+    def _step_request(
+        self,
+        intent: Any,
+        device: str,
+        step: StepName,
+        *,
+        dry_run: bool = True,
+        extra_vars: dict[str, str] | None = None,
+    ) -> StepRequest:
+        platform = str(getattr(intent, "platform", "") or "")
+        return StepRequest(
+            ticket_number=intent.ticket_number,
+            device=DeviceRef(name=device, platform=platform),
+            step=step,
+            change_type=intent.change_type,
+            intent=dict(intent.model_dump()) if hasattr(intent, "model_dump") else {},
+            dry_run=dry_run,
+            extra_vars=extra_vars or {},
+            correlation_id=intent.ticket_number,
+        )
 
     @activity.defn(name="validate_change")
     async def validate_change(self, inp: ValidateInput) -> dict[str, Any]:
@@ -188,9 +244,7 @@ class ChangeActivities:
         # 2. Backup every device; the backup job id is the rollback source.
         backups: dict[str, int] = {}
         for device in intent.devices:
-            res = await self._launch_and_poll(
-                "backup", {"ticket": intent.ticket_number, "device": device}, limit=device
-            )
+            res = await self._run_step(self._step_request(intent, device, "backup"))
             if not res["ok"]:
                 await self._locks.release_all(list(intent.devices), intent.ticket_number)
                 return {
@@ -201,8 +255,8 @@ class ChangeActivities:
             backups[device] = int(res["job_id"])
         self._backups[intent.ticket_number] = backups
         # 3. Baseline via AWX pre-check playbook (neighbours, interfaces, config hash).
-        baseline_res = await self._launch_and_poll(
-            "pre-check", {"ticket": intent.ticket_number}, limit=",".join(intent.devices)
+        baseline_res = await self._run_step(
+            self._step_request(intent, ",".join(intent.devices), "pre_check")
         )
         baseline: dict[str, Any] = (
             {"pre_check_job_id": baseline_res["job_id"]} if baseline_res["ok"] else {}
@@ -257,8 +311,8 @@ class ChangeActivities:
             locks_held_by=intent.ticket_number,
         )
         # AWX post-check playbook first (config match, neighbours, diff).
-        post_res = await self._launch_and_poll(
-            "post-check", {"ticket": intent.ticket_number}, limit=",".join(intent.devices)
+        post_res = await self._run_step(
+            self._step_request(intent, ",".join(intent.devices), "post_check")
         )
         results = await CheckEngine().run(post_checks_for(intent), ctx)
         ok = CheckEngine.all_pass(results) and bool(post_res["ok"])
@@ -280,10 +334,14 @@ class ChangeActivities:
     async def apply_change(self, inp: ApplyInput) -> dict[str, Any]:
         intent = parse_intent(inp.intent)
         # Dry-run first, for the whole change. A non-empty unexpected diff fails before any device is touched.
-        dry = await self._launch_and_poll(
-            "dry-run",
-            {"ticket": intent.ticket_number, "change_type": intent.change_type},
-            limit=",".join(intent.devices),
+        dry = await self._run_step(
+            self._step_request(
+                intent,
+                ",".join(intent.devices),
+                "dry_run",
+                dry_run=True,
+                extra_vars={"change_type": intent.change_type},
+            )
         )
         if not dry["ok"]:
             return {
@@ -294,10 +352,14 @@ class ChangeActivities:
 
         # Apply in waves. Abort threshold stops the rollout; completed waves are rolled back by rollback_change.
         async def apply_wave(wave: list[str]) -> list[str]:
-            res = await self._launch_and_poll(
-                "apply",
-                {"ticket": intent.ticket_number, "change_type": intent.change_type},
-                limit=",".join(wave),
+            res = await self._run_step(
+                self._step_request(
+                    intent,
+                    ",".join(wave),
+                    "apply",
+                    dry_run=False,
+                    extra_vars={"change_type": intent.change_type},
+                )
             )
             return [] if res["ok"] else list(wave)
 
@@ -325,9 +387,86 @@ class ChangeActivities:
             }
         return {"ok": True, "evidence": {"dry_run": dry, "waves": waves.completed_waves}}
 
+    @activity.defn(name="reconcile_change")
+    async def reconcile_change(self, inp: ReconcileInput) -> dict[str, Any]:
+        """Reconcile Git/NetBox with the post-checked device state (E3).
+
+        Runs only after post_check succeeds (the workflow enforces this);
+        a failed post_check rolls back instead and never reaches here, so
+        no Git/NetBox write happens for a failed change.
+        """
+        intent = parse_intent(inp.intent)
+        platform = str(getattr(intent, "platform", "") or "")
+        if self._reconciliation is None:
+            # No reconciliation service wired (e.g. activities constructed
+            # directly in tests): nothing was written anywhere, so there is
+            # nothing to reconcile. The worker always wires the service.
+            return {
+                "ok": True,
+                "status": "reconciled",
+                "devices": list(intent.devices),
+                "evidence": {"reconciliation": "not-configured"},
+            }
+        outcomes: list[dict[str, Any]] = []
+        for device in intent.devices:
+            collect = await self._engine.collect_state(
+                StepRequest(
+                    ticket_number=intent.ticket_number,
+                    device=DeviceRef(name=device, platform=platform),
+                    step="collect_state",
+                    change_type=intent.change_type,
+                    correlation_id=intent.ticket_number,
+                )
+            )
+            outcome = await self._reconciliation.reconcile(
+                ticket=intent.ticket_number,
+                device=device,
+                job_type="playbook",
+                script_name=None,
+                script_sha=None,
+                awx_job_id=collect.job_id or 0,
+                declared=list(collect.declared_changes),
+                collect_result=collect,
+                manifest_writes=[],
+            )
+            outcomes.append(
+                {
+                    "device": device,
+                    "status": outcome.status,
+                    "git_commit": outcome.git_commit,
+                    "netbox_applied": outcome.netbox_applied,
+                    "drift_records": outcome.drift_records,
+                    "failures": outcome.failures,
+                }
+            )
+        pending = any(o["status"] == "reconciliation_pending" for o in outcomes)
+        return {
+            "ok": not pending,
+            "status": "reconciliation_pending" if pending else "reconciled",
+            "devices": outcomes,
+            "evidence": {"outcomes": outcomes},
+        }
+
     @activity.defn(name="close_change")
     async def close_change(self, inp: CloseInput) -> dict[str, Any]:
         intent = parse_intent(inp.intent)
+        # Close refuses a change stuck in reconciliation_pending: only an
+        # approver override (POST /changes/{id}/reconcile-override, which
+        # moves the record to reconciled) may let it close.
+        try:
+            async with self._sessions() as session:
+                change = await self._load(session, inp.change_id)
+                state = ChangeState(change.state) if isinstance(change.state, str) else change.state
+        except Exception:  # noqa: BLE001 — an unloadable change keeps the old behaviour
+            state = None
+        if state == ChangeState.RECONCILIATION_PENDING:
+            return {
+                "ok": False,
+                "failures": [
+                    "change is in reconciliation_pending; an approver override is required"
+                ],
+                "evidence": {"state": state.value},
+            }
         evidence: dict[str, Any] = {}
         for name in intent.devices:
             try:
@@ -357,10 +496,14 @@ class ChangeActivities:
         backups = self._backups.get(intent.ticket_number, {})
         # Rollback restores the pre-change backup per device, via the AWX rollback playbook.
         # The backup job id is passed as extra_vars so the playbook knows which file to restore.
-        res = await self._launch_and_poll(
-            "rollback",
-            {"ticket": intent.ticket_number, "backups": str(backups)},
-            limit=",".join(intent.devices),
+        res = await self._run_step(
+            self._step_request(
+                intent,
+                ",".join(intent.devices),
+                "rollback",
+                dry_run=False,
+                extra_vars={"backups": str(backups)},
+            )
         )
         await self._unsilence_monitoring(intent.ticket_number)
         if self._notifications:
@@ -379,6 +522,7 @@ def all_activities(activities: ChangeActivities) -> list[Callable[..., Any]]:
         activities.pre_check_change,
         activities.post_check_change,
         activities.apply_change,
+        activities.reconcile_change,
         activities.close_change,
         activities.rollback_change,
     ]

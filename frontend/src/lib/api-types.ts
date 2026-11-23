@@ -1,6 +1,12 @@
 /**
  * Generated from the FastAPI OpenAPI schema. Do not edit by hand.
  * Regenerate: npm run generate:api
+ *
+ * NOTE (E5): the generator (openapi-typescript 7.5) emits "[object Object]"
+ * garbage against this repo's OpenAPI 3.1 schema when run in this sandbox
+ * (verified 2026-11-23 against a live /openapi.json dump), so the E5 types
+ * below were added by hand to match the FastAPI models exactly. Re-run the
+ * generator on a working setup before trusting it again.
  */
 export interface ChangeResponse {
   id: string;
@@ -68,10 +74,19 @@ export interface ChangeDetailResponse {
   change: ChangeResponse;
   intent: Record<string, unknown>;
   diff: DiffLineResponse[];
+  diff_summary?: Record<string, unknown>[];
   checks: { name: string; status: string; message: string }[];
   batfish: BatfishGateResult;
   awx_jobs: { job_id?: number | null; status?: string; to_state?: string }[];
   transitions: TransitionResponse[];
+  job_type?: string;
+  awx_job_id?: number | null;
+  awx_job_url?: string | null;
+  script_name?: string | null;
+  script_sha?: string | null;
+  declared_changes?: { object_type: string; identifier: string; field: string; old_value: string; new_value: string }[];
+  reconciliation_status?: string | null;
+  drift_count?: number;
 }
 export interface CreateChangeRequest {
   intent?: Record<string, unknown> | null;
@@ -132,9 +147,32 @@ export interface ComponentHealth {
   status: string;
   detail: string;
 }
+export interface ExecutionEnvironmentHealth {
+  name: string;
+  image?: string | null;
+  status: string;
+  detail: string;
+}
+export interface LabBackendHealth {
+  name: string;
+  status: string;
+  capabilities?: string[];
+  detail?: string;
+}
 export interface SystemHealthResponse {
   status: string;
   components: ComponentHealth[];
+  awx?: ComponentHealth | null;
+  execution_environment?: ExecutionEnvironmentHealth | null;
+  lab_backends?: LabBackendHealth[];
+}
+export interface ScriptResponse {
+  name: string;
+  sha: string;
+  allowed_change_types: string[];
+  allowed_platforms: string[];
+  writes: string[];
+  last_run?: string | null;
 }
 export interface AdapterSettingResponse {
   name: string;
@@ -166,7 +204,6 @@ export interface LoginResponse {
   username: string;
   role: string;
 }
-
 export interface GiteaSetupJob {
   id: string;
   status: string;
@@ -186,4 +223,77 @@ export interface ConfigVersionResponse {
   source: string;
   created_at: string | null;
   lines: number;
+}
+export interface DriftRecord {
+  id: string;
+  device: string;
+  kind: string;
+  severity: string;
+  status: string;
+  first_seen: string | null;
+  last_seen: string | null;
+  baseline_ref: string | null;
+  baseline_hash: string | null;
+  running_hash: string | null;
+  diff: string;
+  attributed_actor: string | null;
+  attributed_at: string | null;
+  linked_ticket: string | null;
+}
+export interface DriftDecision {
+  id: string;
+  action: string;
+  actor: string;
+  reason: string;
+  ticket_ref: string;
+  expiry: string | null;
+  created_at: string | null;
+}
+export interface DriftAuditEntry {
+  id: string;
+  from_state: string;
+  to_state: string;
+  actor: string;
+  reason: string;
+  created_at: string | null;
+}
+export interface DriftDetail {
+  record: DriftRecord;
+  decisions: DriftDecision[];
+  audit: DriftAuditEntry[];
+}
+export interface DriftList {
+  items: DriftRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+export interface DriftLastScan {
+  site: string;
+  scan_id: string | null;
+  status: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  devices_scanned: number;
+  devices_with_drift: number;
+  devices_failed: number;
+}
+export interface DriftSummary {
+  by_severity: Record<string, number>;
+  by_kind: Record<string, number>;
+  by_status: Record<string, number>;
+  total_open: number;
+  last_scan_per_site: DriftLastScan[];
+  scanned_devices: string[];
+  never_scanned_devices: string[];
+  never_scanned_best_effort: boolean;
+}
+export interface DriftIgnoreRule {
+  id: string;
+  pattern: string;
+  platform: string;
+  scope: string;
+  target: string;
+  created_by: string;
+  created_at: string | null;
 }

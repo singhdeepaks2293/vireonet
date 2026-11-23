@@ -18,7 +18,9 @@ HAPPY_PATH = [
     (ChangeState.APPROVED, ChangeState.PRE_CHECKED),
     (ChangeState.PRE_CHECKED, ChangeState.APPLIED),
     (ChangeState.APPLIED, ChangeState.POST_CHECKED),
-    (ChangeState.POST_CHECKED, ChangeState.CLOSED),
+    (ChangeState.POST_CHECKED, ChangeState.RECONCILING),
+    (ChangeState.RECONCILING, ChangeState.RECONCILED),
+    (ChangeState.RECONCILED, ChangeState.CLOSED),
 ]
 
 

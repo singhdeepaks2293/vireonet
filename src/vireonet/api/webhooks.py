@@ -7,6 +7,48 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from vireonet.api.security import verify_webhook
 from vireonet.structlog_config import get_logger
 
+
+async def _handle_drift_mr(request: Request, branch: str, merged: bool) -> None:
+    """Drift MR signal (D4): a drift/<device>/<short> branch that merged
+    (or closed unmerged) resolves (or reopens) the matching drift record.
+
+    Best-effort and never fatal to the webhook: a drift failure must not
+    break the normal change signal path. No-op for non-drift branches.
+    """
+    if not branch.startswith("drift/"):
+        return
+    try:
+        from vireonet.drift.collector import DriftCollector
+        from vireonet.drift.resolve import handle_mr_merged
+
+        sessions = getattr(request.app.state, "session_factory", None)
+        if sessions is None:
+            return
+        engine = getattr(request.app.state, "execution_engine", None)
+        locks = getattr(request.app.state, "lock_service", None)
+        collector = None
+        if engine and locks:
+            drift_collector = DriftCollector(engine, locks)
+
+            async def collect(device: str) -> str:
+                return await drift_collector.collect(device, "", "", "drift-mr-merged")
+
+            collector = collect
+        settings = request.app.state.settings
+        await handle_mr_merged(
+            sessions,
+            branch=branch,
+            merged=merged,
+            config_store=getattr(request.app.state, "config_store", None),
+            device_repos=getattr(request.app.state, "device_repo_manager", None),
+            collector=collector,
+            notifier=(getattr(request.app.state, "adapters", {}) or {}).get("notification"),
+            channel=settings.notification_default_channel,
+        )
+    except Exception as exc:  # noqa: BLE001 - drift webhook handling must not fail the webhook
+        get_logger(__name__).warning("drift MR webhook handling failed", error=str(exc))
+
+
 router = APIRouter()
 
 
@@ -59,9 +101,12 @@ async def gitlab_webhook(request: Request) -> dict[str, str]:
             # Ticket is the MR title prefix `RITM...:` or the source branch `change/RITM...`.
             title = str(attrs.get("title", ""))
             ticket = title.split(":")[0].strip() if ":" in title else ""
+            await _handle_drift_mr(request, str(attrs.get("source_branch", "")), merged=True)
             if ticket and temporal is not None:
                 await temporal.signal_merge(ticket)
             return {"status": "accepted", "signal": "merge"}
+        if str(attrs.get("state")) == "closed":
+            await _handle_drift_mr(request, str(attrs.get("source_branch", "")), merged=False)
         return {"status": "ignored", "reason": "merge_request not merged"}
     return {"status": "ignored", "reason": f"unknown object_kind {kind}"}
 
@@ -94,9 +139,14 @@ async def github_webhook(
         and payload.get("action") == "closed"
         and payload.get("pull_request", {}).get("merged")
     ):
+        pr = payload.get("pull_request", {})
+        await _handle_drift_mr(request, str(pr.get("head", {}).get("ref", "")), merged=True)
         ticket = _ticket_from_title(str(payload["pull_request"].get("title", "")))
         if ticket and temporal is not None:
             await temporal.signal_merge(ticket)
+    elif x_github_event == "pull_request" and payload.get("action") == "closed":
+        pr = payload.get("pull_request", {})
+        await _handle_drift_mr(request, str(pr.get("head", {}).get("ref", "")), merged=False)
     return {"status": "accepted", "provider": "github"}
 
 
@@ -145,7 +195,12 @@ async def gitea_webhook(
         and payload.get("action") == "closed"
         and payload.get("pull_request", {}).get("merged")
     ):
+        pr = payload.get("pull_request", {})
+        await _handle_drift_mr(request, str(pr.get("head", {}).get("ref", "")), merged=True)
         ticket = _ticket_from_title(str(payload["pull_request"].get("title", "")))
         if ticket and temporal is not None:
             await temporal.signal_merge(ticket)
+    elif x_gitea_event == "pull_request" and payload.get("action") == "closed":
+        pr = payload.get("pull_request", {})
+        await _handle_drift_mr(request, str(pr.get("head", {}).get("ref", "")), merged=False)
     return {"status": "accepted", "provider": "gitea"}

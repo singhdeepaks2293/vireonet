@@ -19,6 +19,7 @@ def test_healthz_and_adapter_health() -> None:
         "batfish",
         "vault",
         "eveng",
+        "containerlab",
         "dhcp",
         "notification",
         "monitoring",

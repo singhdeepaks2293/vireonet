@@ -1,0 +1,26 @@
+# Custom credential type: VireoNet device credentials (E2).
+# Attach to the run-python job template so runners get device credentials
+# only as environment variables — never in extra_vars or job output.
+name: VireoNet Device
+kind: cloud
+inputs:
+  fields:
+    - id: username
+      label: Username
+      type: string
+    - id: password
+      label: Password
+      type: string
+      secret: true
+    - id: enable_password
+      label: Enable password
+      type: string
+      secret: true
+  required:
+    - username
+    - password
+injectors:
+  env:
+    VIREONET_DEVICE_USERNAME: "{{ username }}"
+    VIREONET_DEVICE_PASSWORD: "{{ password }}"
+    VIREONET_DEVICE_ENABLE: "{{ enable_password }}"

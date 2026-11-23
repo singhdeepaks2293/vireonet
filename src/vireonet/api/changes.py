@@ -240,11 +240,23 @@ class ChangeDetailResponse(BaseModel):
     batfish: dict[str, Any]
     awx_jobs: list[dict[str, Any]]
     transitions: list[TransitionResponse]
+    # E5 execution provenance, derived from stored data only (see
+    # ChangeService.get_detail): job_type defaults to "playbook" when the
+    # change record/intent stores none; the rest are empty/None when absent.
+    job_type: str = "playbook"
+    awx_job_id: int | None = None
+    awx_job_url: str | None = None
+    script_name: str | None = None
+    script_sha: str | None = None
+    declared_changes: list[dict[str, Any]] = []
+    reconciliation_status: str | None = None
+    drift_count: int = 0
 
 
 @router.get("/changes/{change_id}/detail", response_model=ChangeDetailResponse)
 async def get_change_detail(
     change_id: str,
+    request: Request,
     service: ChangeService = Depends(get_service),
     _role: str = Depends(require_role("viewer")),
 ) -> ChangeDetailResponse:
@@ -252,6 +264,18 @@ async def get_change_detail(
     if detail is None:
         raise HTTPException(status_code=404, detail="change not found")
     change = detail["change"]
+    awx_job_id: int | None = None
+    for job in detail["awx_jobs"]:
+        if job.get("job_id") is not None:
+            awx_job_id = int(job["job_id"])
+            break
+    # The AWX job URL is built from the configured AWX base URL; without
+    # one there is no URL to link to, so it stays None.
+    settings = request.app.state.settings
+    awx_base_url = str(getattr(settings, "awx_base_url", "") or "").rstrip("/")
+    awx_job_url = (
+        f"{awx_base_url}/#/jobs/playbook/{awx_job_id}" if awx_base_url and awx_job_id else None
+    )
     return ChangeDetailResponse(
         change=_to_response(change),
         intent=detail["intent"],
@@ -261,6 +285,62 @@ async def get_change_detail(
         batfish=detail["batfish"],
         awx_jobs=detail["awx_jobs"],
         transitions=[TransitionResponse(**t) for t in detail["transitions"]],
+        job_type=str(detail.get("job_type", "playbook")),
+        awx_job_id=awx_job_id,
+        awx_job_url=awx_job_url,
+        script_name=detail.get("script_name"),
+        script_sha=detail.get("script_sha"),
+        declared_changes=list(detail.get("declared_changes", [])),
+        reconciliation_status=detail.get("reconciliation_status"),
+        drift_count=int(detail.get("drift_count", 0)),
+    )
+
+
+class ReconcileOverrideRequest(BaseModel):
+    reason: str
+
+
+class ReconcileOverrideResponse(BaseModel):
+    id: str
+    ticket_number: str
+    state: str
+    status: str
+
+
+@router.post(
+    "/changes/{change_id}/reconcile-override",
+    status_code=200,
+    response_model=ReconcileOverrideResponse,
+)
+async def reconcile_override(
+    change_id: str,
+    payload: ReconcileOverrideRequest,
+    service: ChangeService = Depends(get_service),
+    user: Any = Depends(require_role("approver")),
+) -> ReconcileOverrideResponse:
+    """Approver override for a change stuck in reconciliation_pending.
+
+    Records the override in the audit trail (two transitions,
+    reconciliation_pending -> reconciling -> reconciled, both carrying the
+    reason) and leaves the change reconciled and close-eligible. The
+    Temporal workflow has already returned by this point; this endpoint
+    does not re-run it. Requires a reason.
+    """
+    if not payload.reason.strip():
+        raise HTTPException(status_code=422, detail="reconcile override requires a reason")
+    try:
+        change = await service.reconcile_override(
+            change_id, actor=user.username, reason=payload.reason
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if change is None:
+        raise HTTPException(status_code=404, detail="change not found")
+    return ReconcileOverrideResponse(
+        id=str(change.id),
+        ticket_number=change.ticket_number,
+        state=str(change.state.value if hasattr(change.state, "value") else change.state),
+        status="override-recorded",
     )
 
 

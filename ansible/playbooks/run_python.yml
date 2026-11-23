@@ -1,0 +1,25 @@
+---
+# Run a Python device runner inside the VireoNet EE (E2).
+# The runner reads a JSON RunnerRequest on stdin and prints a JSON
+# RunnerResult wrapped in VIREONET-RESULT-BEGIN/END markers.
+- name: Run Python device runner
+  hosts: "{{ device | default('all') }}"
+  gather_facts: false
+  vars:
+    runner_step: collect_state
+    runner_request: "{}"
+  tasks:
+    - name: Run vireonet runner
+      ansible.builtin.command:
+        argv: ["python", "-m", "vireonet_runners.runners", "{{ runner_step }}"]
+        stdin: "{{ runner_request }}"
+      register: runner_out
+      changed_when: runner_out.rc == 0
+      failed_when: runner_out.rc != 0
+
+    - name: Expose runner result to AWX
+      # UNCERTAIN how AWX exposes set_stats via its API: the engine tries
+      # the job events first and falls back to parsing the stdout markers.
+      ansible.builtin.set_stats:
+        data:
+          vireonet_result: "{{ runner_out.stdout }}"

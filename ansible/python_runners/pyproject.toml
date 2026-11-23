@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vireonet-runners"
+version = "0.1.0"
+description = "Python device runners for VireoNet (run inside the AWX execution environment)"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.10.4",
+    "nornir==3.5.0",
+    "nornir-netmiko==1.0.0",
+    "nornir-napalm==1.0.0",
+    "nornir-utils==0.2.0",
+    "netmiko==4.5.0",
+    "napalm==5.0.0",
+    "textfsm==1.1.3",
+    "ttp==0.9.5",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vireonet_runners*"]

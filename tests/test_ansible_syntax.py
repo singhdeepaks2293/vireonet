@@ -29,6 +29,7 @@ def test_job_templates_reference_existing_playbooks() -> None:
             "rollback",
             "ztp-day1",
             "dhcp-reload",
+            "run-python",
         }
 
 

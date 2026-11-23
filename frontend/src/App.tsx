@@ -6,23 +6,31 @@ import Login from "./pages/Login";
 import Adapters from "./pages/Adapters";
 import Approvals from "./pages/Approvals";
 import ChangeDetail from "./pages/ChangeDetail";
+import DriftDetail from "./pages/DriftDetail";
+import DriftList from "./pages/DriftList";
+import Exceptions from "./pages/Exceptions";
 import ChangesList from "./pages/ChangesList";
 import ConfigRepos from "./pages/ConfigRepos";
 import GitSetup from "./pages/GitSetup";
 import IamUsers from "./pages/IamUsers";
 import Locks from "./pages/Locks";
+import Scripts from "./pages/Scripts";
 import StyleReference from "./pages/StyleReference";
 import SystemHealth from "./pages/SystemHealth";
 import ZtpDevices from "./pages/ZtpDevices";
 
 const TITLES: Record<string, string> = {
   "/changes": "Changes",
+  "/drift": "Drift",
+  "/drift/:id": "Drift detail",
+  "/exceptions": "Exceptions",
   "/ztp": "ZTP devices",
   "/approvals": "Approvals",
   "/locks": "Locks and change windows",
   "/health": "System health",
   "/adapters": "Adapters",
   "/iam": "IAM",
+  "/scripts": "Scripts",
   "/setup/gitea": "Gitea setup",
   "/config": "Config version control",
   "/style": "Style reference",
@@ -30,6 +38,7 @@ const TITLES: Record<string, string> = {
 
 function titleFor(pathname: string): string {
   if (pathname.startsWith("/changes/")) return "Change detail";
+  if (pathname.startsWith("/drift/")) return "Drift detail";
   return TITLES[pathname] ?? "VireoNet";
 }
 
@@ -43,12 +52,16 @@ function RoutesWithShell({ theme, onToggleTheme }: { theme: "light" | "dark"; on
         <Route path="/" element={<Navigate to="/changes" replace />} />
         <Route path="/changes" element={<ChangesList />} />
         <Route path="/changes/:id" element={<ChangeDetail />} />
+        <Route path="/drift" element={<DriftList />} />
+        <Route path="/drift/:id" element={<DriftDetail />} />
+        <Route path="/exceptions" element={<Exceptions />} />
         <Route path="/ztp" element={<ZtpDevices />} />
         <Route path="/approvals" element={<Approvals />} />
         <Route path="/locks" element={<Locks />} />
         <Route path="/health" element={<SystemHealth />} />
         <Route path="/adapters" element={<Adapters />} />
         <Route path="/iam" element={<IamUsers />} />
+        <Route path="/scripts" element={<Scripts />} />
         <Route path="/setup/gitea" element={<GitSetup />} />
         <Route path="/config" element={<ConfigRepos />} />
         <Route path="/style" element={<StyleReference />} />

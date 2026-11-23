@@ -1,0 +1,15 @@
+!
+version 17.6
+hostname edge-01
+!
+username ops secret 5 <redacted>
+!
+interface GigabitEthernet0/0
+ description WAN-UPLINK-CHANGED
+ no shutdown
+!
+interface GigabitEthernet0/3
+ description spare
+ shutdown
+!
+end

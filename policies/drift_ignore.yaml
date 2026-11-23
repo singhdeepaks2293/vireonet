@@ -1,0 +1,19 @@
+# Volatile config lines that must never count as drift (D1).
+# Patterns are regexes, matched per line (re.search). "*" applies to every platform.
+ios:
+  - "Last configuration change"
+  - "NVRAM config last updated"
+  - "^ntp clock-period"
+  - "uptime is"
+iosxe:
+  - "Last configuration change"
+  - "NVRAM config last updated"
+  - "^ntp clock-period"
+  - "uptime is"
+nxos:
+  - "Last configuration change"
+  - "^banner motd"
+eos:
+  - "uptime is"
+junos:
+  - "# Last commit"

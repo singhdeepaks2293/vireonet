@@ -1,0 +1,26 @@
+!
+version 15.2
+Last configuration change at 12:34:56 UTC Mon Nov 23 2026 by admin
+NVRAM config last updated at 12:00:00 UTC Mon Nov 23 2026 by admin
+ntp clock-period 17179869
+hostname leaf-01
+leaf-01 uptime is 3 days, 4 hours
+!
+username admin secret 5 $1$abc$defghijk
+enable password 7 1234567890abcdef
+!
+interface GigabitEthernet0/2
+ description downlink
+ shutdown
+!
+interface GigabitEthernet0/1
+ description CHANGED-UPLINK
+ no shutdown
+!
+ip access-list extended WEB
+ permit tcp any any eq 80
+!
+line vty 0 4
+ login local
+!
+end

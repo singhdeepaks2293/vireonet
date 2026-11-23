@@ -1,0 +1,19 @@
+!
+version 17.6
+Last configuration change at 09:00:00 UTC Tue Nov 24 2026 by netops
+NVRAM config last updated at 08:00:00 UTC Tue Nov 24 2026 by netops
+ntp clock-period 17179999
+hostname edge-01
+edge-01 uptime is 10 days, 1 hour
+!
+username ops secret 5 $1$xyz$abcdefgh
+!
+interface GigabitEthernet0/3
+ description spare
+ shutdown
+!
+interface GigabitEthernet0/0
+ description WAN-UPLINK-CHANGED
+ no shutdown
+!
+end

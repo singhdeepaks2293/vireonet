@@ -1,19 +1,93 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from vireonet.adapters.awx import AwxAdapter
 from vireonet.adapters.base import AdapterConfig, BaseAdapter
 from vireonet.adapters.batfish import BatfishAdapter
+from vireonet.adapters.containerlab import ContainerlabAdapter
 from vireonet.adapters.dhcp import DhcpAdapter
 from vireonet.adapters.errors import AdapterUnavailable
 from vireonet.adapters.eveng import EveNgAdapter
 from vireonet.adapters.fakes import ALL_FAKE_ADAPTERS
 from vireonet.adapters.gitlab import GitLabAdapter
+from vireonet.adapters.lab import LabAdapter
 from vireonet.adapters.monitoring import MonitoringAdapter
 from vireonet.adapters.netbox import NetBoxAdapter
 from vireonet.adapters.notification import NotificationAdapter
 from vireonet.adapters.servicenow import ServiceNowAdapter
 from vireonet.adapters.vault import VaultAdapter
 from vireonet.config import Settings
+
+LAB_BACKENDS = ("eveng", "containerlab", "both")
+
+
+def _eveng_adapter(settings: Settings, cfg: AdapterConfig) -> EveNgAdapter:
+    return EveNgAdapter(
+        cfg,
+        username=settings.eveng_username,
+        password=settings.eveng_password,
+    )
+
+
+def _containerlab_adapter(settings: Settings, cfg: AdapterConfig) -> ContainerlabAdapter:
+    if not settings.containerlab_host or not settings.containerlab_user:
+        raise AdapterUnavailable(
+            "registry",
+            "build_lab_adapters",
+            "containerlab backend needs VIREONET_CONTAINERLAB_HOST and VIREONET_CONTAINERLAB_USER",
+        )
+    return ContainerlabAdapter(
+        cfg,
+        host=settings.containerlab_host,
+        user=settings.containerlab_user,
+        key_path=settings.containerlab_key_path or None,
+        password=settings.containerlab_password or None,
+    )
+
+
+def build_lab_adapters(
+    settings: Settings, cfg: Callable[[str, str | None], AdapterConfig]
+) -> dict[str, BaseAdapter]:
+    """Lab backends selected by VIREONET_LAB_BACKEND (E4).
+
+    ``eveng`` -> ``eveng``; ``containerlab`` -> ``containerlab``; ``both``
+    -> ``lab:eveng`` + ``lab:containerlab`` (distinct names so both can
+    coexist in one adapter map). An unknown value raises at startup; a
+    containerlab backend without host+user refuses to build.
+    """
+    backend = settings.lab_backend
+    if backend not in LAB_BACKENDS:
+        raise AdapterUnavailable(
+            "registry",
+            "build_lab_adapters",
+            f"unknown lab backend {backend!r} (want eveng|containerlab|both)",
+        )
+    out: dict[str, BaseAdapter] = {}
+    if backend in {"eveng", "both"}:
+        key = "lab:eveng" if backend == "both" else "eveng"
+        out[key] = _eveng_adapter(settings, cfg("eveng", settings.eveng_base_url))
+    if backend in {"containerlab", "both"}:
+        key = "lab:containerlab" if backend == "both" else "containerlab"
+        out[key] = _containerlab_adapter(settings, cfg("containerlab", None))
+    return out
+
+
+def lab_adapter_for(settings: Settings, backend: str) -> LabAdapter:
+    """The one LabAdapter named by ``backend`` (eveng|containerlab).
+
+    Used by scripts/lab_smoke.py so the smoke run builds exactly the
+    backend it was asked for, with the same validation as the registry.
+    """
+    if backend == "eveng":
+        return _eveng_adapter(
+            settings, AdapterConfig(name="eveng", base_url=settings.eveng_base_url)
+        )
+    if backend == "containerlab":
+        return _containerlab_adapter(settings, AdapterConfig(name="containerlab"))
+    raise AdapterUnavailable(
+        "registry", "lab_adapter_for", f"unknown lab backend {backend!r} (want eveng|containerlab)"
+    )
 
 
 def build_adapters(settings: Settings) -> dict[str, BaseAdapter]:
@@ -63,11 +137,12 @@ def build_adapters(settings: Settings) -> dict[str, BaseAdapter]:
             port=settings.batfish_port,
             snapshot_dir=settings.batfish_snapshot_dir,
         )
-        out["eveng"] = EveNgAdapter(
-            cfg("eveng", settings.eveng_base_url),
-            username=settings.eveng_username,
-            password=settings.eveng_password,
-        )
+        # Lab backends (E4): replace the fake lab adapters with the real
+        # ones selected by VIREONET_LAB_BACKEND. build_lab_adapters raises
+        # on an unknown backend or missing containerlab host/user.
+        out.pop("eveng", None)
+        out.pop("containerlab", None)
+        out.update(build_lab_adapters(settings, cfg))
         out["dhcp"] = DhcpAdapter(
             cfg("dhcp", None),
             netbox=out["netbox"],  # type: ignore[arg-type]

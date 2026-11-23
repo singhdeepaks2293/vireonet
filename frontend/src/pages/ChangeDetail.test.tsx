@@ -17,6 +17,14 @@ vi.mock("../lib/api", async (orig) => {
         checks: [{ name: "reachability", status: "pass", message: "all devices active" }],
         batfish: { passed: true, failures: [] },
         awx_jobs: [{ job_id: 42, status: "successful", to_state: "applied" }],
+        job_type: "python",
+        awx_job_id: 42,
+        awx_job_url: "https://awx.example/#/jobs/playbook/42",
+        script_name: "add_vlan_nornir",
+        script_sha: "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+        declared_changes: [{ object_type: "vlan", identifier: "100", field: "name", old_value: "", new_value: "web" }],
+        reconciliation_status: "reconciled",
+        drift_count: 0,
         transitions: [{ from_state: "received", to_state: "validated", actor: "vireonet", reason: "ok", evidence: {}, created_at: "2026-11-23T11:00:00Z" }],
       },
       isLoading: false, isError: false, error: null, refetch: vi.fn(),
@@ -62,5 +70,15 @@ describe("ChangeDetail", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Audit trail" }));
     await waitFor(() => expect(screen.getAllByText("received").length).toBeGreaterThan(0));
     expect(screen.getAllByText("validated").length).toBeGreaterThan(0);
+  });
+
+  it("shows the Execution section with job type, AWX link, script and declared changes", async () => {
+    renderDetail();
+    await waitFor(() => expect(screen.getByText("Execution")).toBeInTheDocument());
+    expect(screen.getByText("python")).toBeInTheDocument();
+    expect(screen.getByText("add_vlan_nornir")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "42" })).toHaveAttribute("href", "https://awx.example/#/jobs/playbook/42");
+    expect(screen.getByText("reconciled")).toBeInTheDocument();
+    expect(screen.getByText("web")).toBeInTheDocument();
   });
 });

@@ -93,6 +93,36 @@ class ChangeDiff(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class DriftRecord(Base):
+    """One detected drift between the baseline and a device's running config (E3).
+
+    D1 will extend this table; E3 only needs the fields below.
+    """
+
+    __tablename__ = "drift_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    device: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[str] = mapped_column(String(32), nullable=False, default="medium")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="detected")
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    baseline_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    baseline_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    running_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    diff: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    attributed_actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # D1: when the actor was attributed (None when attribution is unknown).
+    attributed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    linked_ticket: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 

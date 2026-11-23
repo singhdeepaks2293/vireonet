@@ -10,6 +10,7 @@ from vireonet.config import Settings
 from vireonet.temporal.workflow import ChangeWorkflow, ChangeWorkflowInput
 
 if TYPE_CHECKING:
+    from vireonet.drift.workflows import DriftScanInput
     from vireonet.temporal.ztp_workflow import CallbackPayload, ZtpWorkflowInput
 
 
@@ -21,6 +22,7 @@ class TemporalClientProtocol(Protocol):
     async def signal_merge(self, ticket: str) -> None: ...
     async def get_state(self, ticket: str) -> dict[str, Any]: ...
     async def start_ztp(self, inp: ZtpWorkflowInput) -> str: ...
+    async def start_drift_scan(self, inp: DriftScanInput) -> str: ...
     async def signal_ztp_callback(self, serial: str, payload: CallbackPayload) -> None: ...
 
 
@@ -99,6 +101,24 @@ class RealTemporalClient:
             handle = client.get_workflow_handle(inp.ticket_number)
         return str(handle.id)
 
+    async def start_drift_scan(self, inp: DriftScanInput) -> str:
+        """Start a DriftScanWorkflow. Workflow ID = drift-scan-<site>-<date>."""
+        from vireonet.drift.workflows import DriftScanWorkflow
+
+        client = await self._get_client()
+        workflow_id = f"drift-scan-{inp.site}-{inp.date}"
+        try:
+            handle = await client.start_workflow(
+                DriftScanWorkflow.run,
+                inp,
+                id=workflow_id,
+                task_queue=self._settings.temporal_task_queue,
+                id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+            )
+        except WorkflowAlreadyStartedError:
+            handle = client.get_workflow_handle(workflow_id)
+        return str(handle.id)
+
     def get_ztp_handle(self, serial: str) -> NoReturn:
         # Caller must await _get_client first in real code; this helper is for
         # the API, which uses signal_ztp_callback below instead.
@@ -123,6 +143,7 @@ class FakeTemporalClient:
 
     def __init__(self) -> None:
         self.starts: list[ChangeWorkflowInput | ZtpWorkflowInput] = []
+        self.drift_scans: list[DriftScanInput] = []
         self.signals: list[tuple[str, str, str]] = []  # (ticket, signal, arg)
 
     async def start_change(self, inp: ChangeWorkflowInput) -> str:
@@ -148,6 +169,10 @@ class FakeTemporalClient:
     async def start_ztp(self, inp: ZtpWorkflowInput) -> str:
         self.starts.append(inp)
         return inp.ticket_number
+
+    async def start_drift_scan(self, inp: DriftScanInput) -> str:
+        self.drift_scans.append(inp)
+        return f"drift-scan-{inp.site}-{inp.date}"
 
     async def signal_ztp_callback(self, serial: str, payload: CallbackPayload) -> None:
         self.signals.append((f"ZTP-{serial}", "device_callback", str(payload.serial)))

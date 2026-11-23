@@ -1,0 +1,9 @@
+# Drift severity policy (D2). See src/vireonet/drift/severity.py.
+# critical = unmanaged change in a critical section on a protected device.
+# high = unmanaged change in a high-severity section.
+# low = change touches only unmanaged sections. medium = default.
+protected_devices: ["core-01", "core-02", "fw-01"]
+critical_sections: ["acl", "routing", "aaa"]
+high_sections: ["interfaces"]
+managed_sections: ["interfaces", "acl", "routing", "aaa"]
+default_severity: "medium"

@@ -13,6 +13,7 @@ import type {
   LoginResponse,
   PaginatedChanges,
   PaginatedZtpDevices,
+  ScriptResponse,
   SystemHealthResponse,
 } from "./api-types";
 
@@ -27,7 +28,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const token = localStorage.getItem("vireonet-token") ?? TOKEN;
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -106,6 +107,7 @@ export const api = {
   createIamUser: (body: { username: string; display_name?: string; password: string; role: string }) => request<IamUser>("/iam/users", { method: "POST", body: JSON.stringify(body) }),
   updateIamUser: (id: string, body: { role?: string; is_active?: boolean }) => request<IamUser>(`/iam/users/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   listIamRoles: () => request<IamRolesResponse>("/iam/roles"),
+  listScripts: () => request<ScriptResponse[]>("/scripts"),
   giteaManualSteps: () => request<{ steps: string[] }>("/setup/gitea/manual"),
   giteaInstall: (body: { admin_user: string; repo: string; base_url: string }) => request<GiteaSetupJob>("/setup/gitea/install", { method: "POST", body: JSON.stringify(body) }),
   giteaInstallStatus: (jobId: string) => request<GiteaSetupJob>(`/setup/gitea/status/${jobId}`),
@@ -146,6 +148,9 @@ export function useIamUsers() {
 }
 export function useIamRoles() {
   return useQuery({ queryKey: ["iam-roles"], queryFn: () => api.listIamRoles() });
+}
+export function useScripts() {
+  return useQuery({ queryKey: ["scripts"], queryFn: () => api.listScripts() });
 }
 
 export function useConfigRepos() {

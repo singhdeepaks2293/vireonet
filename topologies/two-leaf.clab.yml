@@ -1,0 +1,21 @@
+# VireoNet two-leaf lab topology for Containerlab (E4).
+# Same lab as topologies/two-leaf.unl, in containerlab format: two leaf
+# switches linked leaf-01:eth1 <-> leaf-02:eth1, with the mgmt IPs the
+# lab tests expect (10.0.1.11 / 10.0.1.12).
+#
+# UNCERTAIN: old IOS images are kind-dependent on Containerlab — only
+# cisco_iol (vrnetlab) is known to run old IOS here; see topologies/README.md.
+# The image must exist on (or be pullable by) the lab host.
+name: two-leaf
+topology:
+  nodes:
+    leaf-01:
+      kind: cisco_iol
+      image: vrnetlab/cisco_iol:latest
+      mgmt-ipv4: 10.0.1.11
+    leaf-02:
+      kind: cisco_iol
+      image: vrnetlab/cisco_iol:latest
+      mgmt-ipv4: 10.0.1.12
+  links:
+    - endpoints: ["leaf-01:eth1", "leaf-02:eth1"]
