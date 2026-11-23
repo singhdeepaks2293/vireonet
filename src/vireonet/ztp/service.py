@@ -81,7 +81,9 @@ class ZtpService:
         """Single-use, expiry-checked, constant-time. Marks used on success."""
         async with self._sessions() as session:
             device = (
-                await session.execute(select(ZtpDevice).where(ZtpDevice.serial == serial))
+                await session.execute(
+                    select(ZtpDevice).where(ZtpDevice.serial == serial).with_for_update()
+                )
             ).scalar_one_or_none()
             if device is None or not device.token_hash or device.token_used:
                 return False
