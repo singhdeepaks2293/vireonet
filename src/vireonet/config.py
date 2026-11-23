@@ -98,6 +98,13 @@ class Settings(BaseSettings):
     admin_user: str | None = None
     admin_password: str | None = None
 
+    # CORS origins for the browser UI, comma-separated.
+    # The UI runs on a different origin (5173) than the API (8000), so
+    # without this the browser blocks every fetch and login always fails
+    # in the UI even though curl works. Add your LAN origin here for
+    # remote access, e.g. http://10.228.197.24:5173
+    cors_origins: str = "http://localhost:5173,http://localhost:4173,http://localhost:8000,http://127.0.0.1:5173"
+
 
 def get_settings() -> Settings:
     return Settings()

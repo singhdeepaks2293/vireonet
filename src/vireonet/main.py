@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -52,6 +53,16 @@ def create_app(
     if temporal_client is None:
         temporal_client = FakeTemporalClient() if settings.adapter_mode == "fake" else RealTemporalClient(settings)
     app = FastAPI(title="VireoNet", version="0.1.0")
+    # CORS: the browser UI (5173) is a different origin from the API (8000).
+    # Without this the browser blocks login and every API call, while curl
+    # works fine — exactly the "API login works, UI login fails" symptom.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.settings = settings
     app.state.adapters = adapters
     app.state.temporal_client = temporal_client
