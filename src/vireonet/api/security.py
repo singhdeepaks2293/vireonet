@@ -48,6 +48,25 @@ async def verify_webhook(request: Request, settings: Settings) -> None:
     raise HTTPException(status_code=401, detail="webhook authentication required")
 
 
+async def verify_github_webhook(request: Request, settings: Settings) -> None:
+    """Verify GitHub's native X-Hub-Signature-256 header over the raw body."""
+    secret = settings.webhook_secret
+    if not secret:
+        if settings.dev:
+            get_logger(__name__).warning(
+                "GitHub webhook called without a secret (explicit dev mode)"
+            )
+            return
+        raise HTTPException(status_code=401, detail="GitHub webhook secret is not configured")
+    signature = request.headers.get("X-Hub-Signature-256", "")
+    if not signature.startswith("sha256="):
+        raise HTTPException(status_code=401, detail="GitHub signature is missing")
+    body = await request.body()
+    expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=401, detail="invalid GitHub webhook signature")
+
+
 class CurrentUser:
     def __init__(self, user_id: str, username: str, role: str):
         self.user_id = user_id

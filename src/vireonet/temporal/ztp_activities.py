@@ -54,6 +54,7 @@ class IdentityInput:
 class Day1Input:
     serial: str
     hostname: str
+    mac_address: str
     model: str
     platform: str
     site: str
@@ -81,6 +82,9 @@ class ZtpActivities:
         tftp_server: str = "10.0.0.5",
         http_base_url: str = "http://10.0.0.5/ztp",
         pnp_server_url: str = "",
+        dhcp_server: str = "isc",
+        ip_pool: str = "10.0.1.0/24",
+        management_interface: str = "GigabitEthernet0/0",
         policy: PolicyEngine | None = None,
         engine: ExecutionEngine | None = None,
         config_store: ConfigStore | None = None,
@@ -104,6 +108,15 @@ class ZtpActivities:
         self._tftp = tftp_server
         self._http_base = http_base_url
         self._pnp_url = pnp_server_url
+        if dhcp_server not in {"isc", "kea"}:
+            raise ValueError(f"unsupported DHCP server {dhcp_server!r}")
+        if not ip_pool:
+            raise ValueError("ZTP IP pool must be configured")
+        if not management_interface:
+            raise ValueError("ZTP management interface must be configured")
+        self._dhcp_server = dhcp_server
+        self._ip_pool = ip_pool
+        self._management_interface = management_interface
         self._policy = policy
         # D1: optional baseline wiring. When both are set, a successful
         # day-1 commits the collected running config as the device's
@@ -114,12 +127,14 @@ class ZtpActivities:
 
     @activity.defn(name="ztp_create_reservation")
     async def create_reservation(self, inp: ReservationInput) -> dict[str, Any]:
-        ip = await self._netbox.allocate_ip("10.0.1.0/24", f"ztp {inp.hostname}")
+        ip = await self._netbox.allocate_ip(self._ip_pool, f"ztp {inp.hostname}")
         reservation = await self._dhcp.generate_reservation(inp.hostname, inp.mac_address, ip)
-        config = await self._dhcp.render_config([reservation], "isc")
+        config = await self._dhcp.render_config([reservation], self._dhcp_server)
         if not await self._dhcp.validate_config(config):
             return {"ok": False, "error": "DHCP config failed validation"}
-        deployed = await self._dhcp.deploy(config, "isc")
+        deployed = await self._dhcp.deploy_and_verify(
+            config, self._dhcp_server, hostname=inp.hostname
+        )
         bootstrap = render_bootstrap(
             inp.platform,
             {
@@ -129,7 +144,7 @@ class ZtpActivities:
                 "http_base_url": self._http_base,
                 "pnp_server_url": self._pnp_url,
                 "config_file": f"{inp.hostname}.cfg",
-                "mgmt_interface": "GigabitEthernet0/0",
+                "mgmt_interface": self._management_interface,
             },
         )
         await self._ztp.set_stage(inp.serial, "reservation_created", ip_address=ip)
@@ -160,7 +175,7 @@ class ZtpActivities:
                 "site": inp.site,
                 "ticket_number": inp.ticket_number,
                 "requested_by": "ztp",
-                "mac_address": "aa:bb:cc:dd:ee:ff",
+                "mac_address": inp.mac_address,
             }
         )
         # Batfish gate on the day-1 candidate (current config is empty for a new

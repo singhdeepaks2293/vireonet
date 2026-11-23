@@ -1,0 +1,116 @@
+name: vireonet
+
+# Production-oriented single-instance deployment.
+# Supply all values from an external secret manager; do not commit a .env file.
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vireonet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: vireonet
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vireonet -d vireonet"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [backend]
+
+  temporal:
+    image: temporalio/auto-setup:1.29.7
+    restart: unless-stopped
+    environment:
+      DB: postgres12_pgx
+      DB_PORT: "5432"
+      POSTGRES_USER: vireonet
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_SEEDS: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "namespace", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks: [backend]
+
+  api:
+    build: .
+    restart: unless-stopped
+    environment: &vireonet-app-env
+      VIREONET_ADAPTER_MODE: real
+      VIREONET_DEV: "false"
+      VIREONET_DATABASE_URL: postgresql+asyncpg://vireonet:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/vireonet
+      VIREONET_TEMPORAL_ADDRESS: temporal:7233
+      VIREONET_JWT_SECRET: ${VIREONET_JWT_SECRET:?set VIREONET_JWT_SECRET}
+      VIREONET_WEBHOOK_SECRET: ${VIREONET_WEBHOOK_SECRET:?set VIREONET_WEBHOOK_SECRET}
+      VIREONET_GITLAB_WEBHOOK_TOKEN: ${VIREONET_GITLAB_WEBHOOK_TOKEN:?set VIREONET_GITLAB_WEBHOOK_TOKEN}
+      VIREONET_NETBOX_BASE_URL: ${VIREONET_NETBOX_BASE_URL:?set VIREONET_NETBOX_BASE_URL}
+      VIREONET_NETBOX_TOKEN: ${VIREONET_NETBOX_TOKEN:?set VIREONET_NETBOX_TOKEN}
+      VIREONET_AWX_BASE_URL: ${VIREONET_AWX_BASE_URL:?set VIREONET_AWX_BASE_URL}
+      VIREONET_AWX_TOKEN: ${VIREONET_AWX_TOKEN:?set VIREONET_AWX_TOKEN}
+      VIREONET_SERVICENOW_BASE_URL: ${VIREONET_SERVICENOW_BASE_URL:?set VIREONET_SERVICENOW_BASE_URL}
+      VIREONET_SERVICENOW_CLIENT_ID: ${VIREONET_SERVICENOW_CLIENT_ID:?set VIREONET_SERVICENOW_CLIENT_ID}
+      VIREONET_SERVICENOW_CLIENT_SECRET: ${VIREONET_SERVICENOW_CLIENT_SECRET:?set VIREONET_SERVICENOW_CLIENT_SECRET}
+      VIREONET_VAULT_ADDR: ${VIREONET_VAULT_ADDR:?set VIREONET_VAULT_ADDR}
+      VIREONET_VAULT_ROLE_ID: ${VIREONET_VAULT_ROLE_ID:?set VIREONET_VAULT_ROLE_ID}
+      VIREONET_VAULT_SECRET_ID: ${VIREONET_VAULT_SECRET_ID:?set VIREONET_VAULT_SECRET_ID}
+      VIREONET_GIT_PROVIDER: ${VIREONET_GIT_PROVIDER:-gitlab}
+      VIREONET_GIT_BASE_URL: ${VIREONET_GIT_BASE_URL:?set VIREONET_GIT_BASE_URL}
+      VIREONET_GITLAB_TOKEN: ${VIREONET_GITLAB_TOKEN:?set VIREONET_GITLAB_TOKEN}
+      VIREONET_BATFISH_HOST: ${VIREONET_BATFISH_HOST:?set VIREONET_BATFISH_HOST}
+      VIREONET_LAB_BACKEND: ${VIREONET_LAB_BACKEND:-eveng}
+      VIREONET_EVENG_BASE_URL: ${VIREONET_EVENG_BASE_URL:-}
+      VIREONET_EVENG_USERNAME: ${VIREONET_EVENG_USERNAME:-}
+      VIREONET_EVENG_PASSWORD: ${VIREONET_EVENG_PASSWORD:-}
+      VIREONET_DHCP_SERVER: ${VIREONET_DHCP_SERVER:-isc}
+      VIREONET_DHCP_TFTP_SERVER: ${VIREONET_DHCP_TFTP_SERVER:?set VIREONET_DHCP_TFTP_SERVER}
+      VIREONET_DHCP_HTTP_BASE_URL: ${VIREONET_DHCP_HTTP_BASE_URL:?set VIREONET_DHCP_HTTP_BASE_URL}
+      VIREONET_ZTP_IP_POOL: ${VIREONET_ZTP_IP_POOL:?set VIREONET_ZTP_IP_POOL}
+      VIREONET_ZTP_MANAGEMENT_INTERFACE: ${VIREONET_ZTP_MANAGEMENT_INTERFACE:?set VIREONET_ZTP_MANAGEMENT_INTERFACE}
+      VIREONET_CORS_ORIGINS: ${VIREONET_CORS_ORIGINS:?set VIREONET_CORS_ORIGINS}
+    ports:
+      - "${VIREONET_BIND:-127.0.0.1}:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    command: ["sh", "-c", "alembic upgrade head && uvicorn vireonet.main:app --host 0.0.0.0 --port 8000"]
+    networks: [backend]
+
+  worker:
+    build: .
+    restart: unless-stopped
+    environment: *vireonet-app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      api:
+        condition: service_started
+    command: ["sh", "-c", "python -m vireonet.worker"]
+    networks: [backend]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:?set VITE_API_URL}
+    restart: unless-stopped
+    ports:
+      - "${VIREONET_BIND:-127.0.0.1}:5173:80"
+    depends_on: [api]
+    networks: [backend]
+
+volumes:
+  postgres-data:
+
+networks:
+  backend:
+    driver: bridge

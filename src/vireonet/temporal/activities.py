@@ -17,6 +17,7 @@ from vireonet.adapters.protocols import (
 )
 from vireonet.checks.base import CheckContext, CheckEngine
 from vireonet.checks.plugins import post_checks_for, pre_checks_for
+from vireonet.config_store.store import ConfigStore
 from vireonet.execution.awx_engine import AwxEngine
 from vireonet.execution.engine import ExecutionEngine
 from vireonet.execution.mapping import ExecutionMapping
@@ -28,9 +29,19 @@ from vireonet.observability import record_change, record_check_failure
 from vireonet.planner import plan as make_plan
 from vireonet.policy import PolicyEngine
 from vireonet.reconciliation.service import ReconciliationService
+from vireonet.services.backup import BEGIN_MARKER, extract_running_config
 from vireonet.safety import DeviceLockService, LockHeldError, run_waves
 from vireonet.state_machine import ChangeState, record_transition
 from vireonet.validation import validate_intent
+
+
+# Built-in intent types are explicitly scoped to the NetBox object types
+# that this reconciliation service knows how to update. Unknown types remain
+# fail-closed; custom scripts must supply their own signed manifest scopes.
+_BUILTIN_RECONCILIATION_WRITES: dict[str, list[str]] = {
+    "vlan_add": ["vlan"],
+    "interface_set": ["interface"],
+}
 
 
 def _default_engine(awx: AwxProtocol) -> ExecutionEngine:
@@ -112,6 +123,8 @@ class ChangeActivities:
         monitoring_silence_minutes: int = 60,
         engine: ExecutionEngine | None = None,
         reconciliation: ReconciliationService | None = None,
+        config_store: ConfigStore | None = None,
+        enforce_prechange_diff: bool = False,
     ) -> None:
         self._sessions = session_factory
         self._snow = servicenow
@@ -119,6 +132,8 @@ class ChangeActivities:
         self._awx = awx
         self._engine = engine if engine is not None else _default_engine(awx)
         self._reconciliation = reconciliation
+        self._config_store = config_store
+        self._enforce_prechange_diff = enforce_prechange_diff
         self._policy = policy
         self._locks = DeviceLockService(session_factory, ttl_seconds=lock_ttl_seconds)
         self._wave_size = wave_size
@@ -165,6 +180,33 @@ class ChangeActivities:
             raise ValueError(f"change {change_id} not found")
         return change
 
+    async def _persist_backup_manifest(
+        self, change_id: str, ticket: str, backups: dict[str, int]
+    ) -> None:
+        """Persist AWX backup job references in the Change JSON before apply."""
+        async with self._sessions() as session:
+            change = await self._load(session, change_id)
+            intent = dict(change.intent or {})
+            intent["_vireonet_backup_manifest"] = {
+                "ticket_number": ticket,
+                "backups": {device: int(job_id) for device, job_id in backups.items()},
+            }
+            change.intent = intent
+            await session.commit()
+
+    async def _load_backup_manifest(self, change_id: str) -> dict[str, int]:
+        """Read rollback references from PostgreSQL, never worker memory."""
+        async with self._sessions() as session:
+            change = await self._load(session, change_id)
+            manifest = (change.intent or {}).get("_vireonet_backup_manifest", {})
+            raw = manifest.get("backups", {}) if isinstance(manifest, dict) else {}
+            if not isinstance(raw, dict):
+                raise ValueError(f"invalid persisted backup manifest for change {change_id}")
+            return {str(device): int(job_id) for device, job_id in raw.items()}
+
+    async def _renew_change_locks(self, intent: Any) -> bool:
+        return await self._locks.renew_all(list(intent.devices), intent.ticket_number)
+
     async def _run_step(self, req: StepRequest) -> dict[str, Any]:
         """Run one engine step. Return shape matches the old _launch_and_poll:
         {job_id, status, ok} plus duration_seconds and evidence."""
@@ -184,6 +226,7 @@ class ChangeActivities:
             "ok": result.ok,
             "duration_seconds": result.duration_seconds,
             "evidence": result.evidence,
+            "output": result.output,
         }
 
     def _step_request(
@@ -252,8 +295,61 @@ class ChangeActivities:
                     "failures": [f"backup failed on {device}: {res}"],
                     "evidence": {"backups": backups},
                 }
+            if self._enforce_prechange_diff:
+                if self._config_store is None:
+                    await self._locks.release_all(list(intent.devices), intent.ticket_number)
+                    return {
+                        "ok": False,
+                        "failures": ["production pre-change diff verification is not configured"],
+                        "evidence": {"device": device},
+                    }
+                raw = str(
+                    res.get("output", {}).get("stdout")
+                    or res.get("output", {}).get("stdout_tail")
+                    or ""
+                )
+                try:
+                    if BEGIN_MARKER not in raw:
+                        raise ValueError("backup output is missing VireoNet config markers")
+                    running = extract_running_config(raw)
+                    version = await self._config_store.store_running(
+                        device, running, ticket_number=intent.ticket_number
+                    )
+                    matches = await self._config_store.baseline_matches(
+                        inp.change_id, device, version.id
+                    )
+                except Exception as exc:  # noqa: BLE001 — stale/unknown baseline blocks apply
+                    await self._locks.release_all(list(intent.devices), intent.ticket_number)
+                    return {
+                        "ok": False,
+                        "failures": [f"could not verify approved baseline on {device}: {exc}"],
+                        "evidence": {"device": device},
+                    }
+                if not matches:
+                    await self._locks.release_all(list(intent.devices), intent.ticket_number)
+                    return {
+                        "ok": False,
+                        "failures": [f"running config changed after approval on {device}; recapture diff"],
+                        "evidence": {"device": device, "running_version": version.version},
+                    }
             backups[device] = int(res["job_id"])
-        self._backups[intent.ticket_number] = backups
+            if not await self._renew_change_locks(intent):
+                await self._locks.release_all(list(intent.devices), intent.ticket_number)
+                return {
+                    "ok": False,
+                    "failures": ["device lock lease expired during pre-change backup collection"],
+                    "evidence": {"backups": backups},
+                }
+        try:
+            await self._persist_backup_manifest(inp.change_id, intent.ticket_number, backups)
+        except Exception as exc:  # noqa: BLE001 — rollback evidence must survive worker restart
+            await self._locks.release_all(list(intent.devices), intent.ticket_number)
+            return {
+                "ok": False,
+                "failures": [f"could not persist backup manifest: {exc}"],
+                "evidence": {"backups": backups},
+            }
+        self._backups[intent.ticket_number] = backups  # compatibility cache only
         # 3. Baseline via AWX pre-check playbook (neighbours, interfaces, config hash).
         baseline_res = await self._run_step(
             self._step_request(intent, ",".join(intent.devices), "pre_check")
@@ -300,7 +396,13 @@ class ChangeActivities:
     @activity.defn(name="post_check_change")
     async def post_check_change(self, inp: CheckInput) -> dict[str, Any]:
         intent = parse_intent(inp.intent)
-        backups = self._backups.get(intent.ticket_number, {})
+        backups = await self._load_backup_manifest(inp.change_id)
+        if not await self._renew_change_locks(intent):
+            return {
+                "ok": False,
+                "failures": ["device lock lease was lost before post-check"],
+                "evidence": {"backup_devices": sorted(backups)},
+            }
         ctx = CheckContext(
             intent=intent,
             ticket_number=intent.ticket_number,
@@ -333,6 +435,19 @@ class ChangeActivities:
     @activity.defn(name="apply_change")
     async def apply_change(self, inp: ApplyInput) -> dict[str, Any]:
         intent = parse_intent(inp.intent)
+        backups = await self._load_backup_manifest(inp.change_id)
+        if set(backups) != set(intent.devices):
+            return {
+                "ok": False,
+                "failures": ["durable backup manifest is missing or incomplete; refusing apply"],
+                "evidence": {"backup_devices": sorted(backups), "requested_devices": sorted(intent.devices)},
+            }
+        if not await self._renew_change_locks(intent):
+            return {
+                "ok": False,
+                "failures": ["device lock lease was lost before apply"],
+                "evidence": {"backup_devices": sorted(backups)},
+            }
         # Dry-run first, for the whole change. A non-empty unexpected diff fails before any device is touched.
         dry = await self._run_step(
             self._step_request(
@@ -352,6 +467,8 @@ class ChangeActivities:
 
         # Apply in waves. Abort threshold stops the rollout; completed waves are rolled back by rollback_change.
         async def apply_wave(wave: list[str]) -> list[str]:
+            if not await self._renew_change_locks(intent):
+                return list(wave)
             res = await self._run_step(
                 self._step_request(
                     intent,
@@ -418,6 +535,13 @@ class ChangeActivities:
                     correlation_id=intent.ticket_number,
                 )
             )
+            if not collect.ok:
+                outcomes.append({
+                    "device": device,
+                    "status": "reconciliation_pending",
+                    "failures": [f"state collection failed: {collect.status.value}"],
+                })
+                continue
             outcome = await self._reconciliation.reconcile(
                 ticket=intent.ticket_number,
                 device=device,
@@ -427,7 +551,9 @@ class ChangeActivities:
                 awx_job_id=collect.job_id or 0,
                 declared=list(collect.declared_changes),
                 collect_result=collect,
-                manifest_writes=[],
+                manifest_writes=list(
+                    _BUILTIN_RECONCILIATION_WRITES.get(intent.change_type, [])
+                ),
             )
             outcomes.append(
                 {
@@ -474,14 +600,23 @@ class ChangeActivities:
                 await self._netbox.add_journal_entry(
                     name, "change", f"Change {intent.ticket_number} applied."
                 )
-            except Exception as exc:  # noqa: BLE001 — recorded, not fatal to close
+            except Exception as exc:  # noqa: BLE001 — external state must be confirmed
                 evidence[f"{name}_netbox_error"] = str(exc)
         try:
             await self._snow.close(
                 intent.ticket_number, f"Change {intent.ticket_number} applied and post-checked."
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — do not claim closure while ITSM is open
             evidence["servicenow_error"] = str(exc)
+        if evidence:
+            # Retain the lock and backup evidence for an operator/retry path.
+            # A partial external close is an uncertain outcome, not success.
+            return {
+                "ok": False,
+                "status": "closure_pending",
+                "failures": ["NetBox and/or ServiceNow closure could not be confirmed"],
+                "evidence": evidence,
+            }
         await self._unsilence_monitoring(intent.ticket_number)
         if self._notifications:
             await self._notifications.change_completed(intent.ticket_number)
@@ -493,9 +628,29 @@ class ChangeActivities:
     @activity.defn(name="rollback_change")
     async def rollback_change(self, inp: RollbackInput) -> dict[str, Any]:
         intent = parse_intent(inp.intent)
-        backups = self._backups.get(intent.ticket_number, {})
+        if not await self._renew_change_locks(intent):
+            return {
+                "ok": False,
+                "failures": ["device lock lease was lost before rollback"],
+                "evidence": {"trigger": inp.evidence},
+            }
+        try:
+            backups = await self._load_backup_manifest(inp.change_id)
+        except Exception as exc:  # noqa: BLE001 — missing rollback source is an operator incident
+            return {
+                "ok": False,
+                "failures": [f"durable backup manifest unavailable: {exc}"],
+                "evidence": {"trigger": inp.evidence},
+            }
+        if set(backups) != set(intent.devices):
+            return {
+                "ok": False,
+                "failures": ["durable backup manifest is incomplete; rollback cannot be verified"],
+                "evidence": {"backup_devices": sorted(backups), "requested_devices": sorted(intent.devices)},
+            }
         # Rollback restores the pre-change backup per device, via the AWX rollback playbook.
-        # The backup job id is passed as extra_vars so the playbook knows which file to restore.
+        # The backup job id is the rollback source. Keep the lock and references
+        # until AWX confirms success; a failed/unknown rollback needs intervention.
         res = await self._run_step(
             self._step_request(
                 intent,
@@ -505,13 +660,20 @@ class ChangeActivities:
                 extra_vars={"backups": str(backups)},
             )
         )
+        if not res["ok"]:
+            return {
+                "ok": False,
+                "job_id": res["job_id"],
+                "failures": ["AWX did not confirm rollback success"],
+                "evidence": {"rollback": res, "trigger": inp.evidence},
+            }
         await self._unsilence_monitoring(intent.ticket_number)
         if self._notifications:
             await self._notifications.rolled_back(intent.ticket_number, str(inp.evidence))
         record_change("rolled_back")
         await self._locks.release_all(list(intent.devices), intent.ticket_number)
         self._backups.pop(intent.ticket_number, None)
-        return {"ok": bool(res["ok"]), "job_id": res["job_id"], "evidence": inp.evidence}
+        return {"ok": True, "job_id": res["job_id"], "evidence": inp.evidence}
 
 
 def all_activities(activities: ChangeActivities) -> list[Callable[..., Any]]:

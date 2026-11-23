@@ -44,7 +44,6 @@ class ZtpWorkflow:
 
     @workflow.run
     async def run(self, inp: ZtpWorkflowInput) -> str:
-        # 1. DHCP reservation (NetBox IP + rendered config, Git-deployed).
         res = await workflow.execute_activity(
             "ztp_create_reservation",
             ReservationInput(
@@ -61,7 +60,6 @@ class ZtpWorkflow:
         )
         if not res["ok"]:
             return "failed"
-        # 2. Wait for the device callback (one-time token verified in the API, not here).
         try:
             await workflow.wait_condition(
                 lambda: self._callback is not None,
@@ -70,7 +68,6 @@ class ZtpWorkflow:
         except TimeoutError:
             return "callback_timeout"
         assert self._callback is not None
-        # 3. Identity check — serial / model / platform vs NetBox. No day-1 before this passes.
         ident = await workflow.execute_activity(
             "ztp_verify_identity",
             IdentityInput(
@@ -85,12 +82,12 @@ class ZtpWorkflow:
         )
         if not ident["ok"]:
             return "identity_failed"
-        # 4. Day-1: render + Batfish gate + AWX push.
         day1 = await workflow.execute_activity(
             "ztp_day1_apply",
             Day1Input(
                 serial=inp.serial,
                 hostname=inp.hostname,
+                mac_address=inp.mac_address,
                 model=inp.model,
                 platform=inp.platform,
                 site=inp.site,
@@ -101,8 +98,7 @@ class ZtpWorkflow:
         )
         if not day1["ok"]:
             return "day1_failed"
-        # 5. Activate in NetBox + close in ServiceNow.
-        await workflow.execute_activity(
+        activation = await workflow.execute_activity(
             "ztp_activate",
             ActivateInput(
                 serial=inp.serial, hostname=inp.hostname, ticket_number=inp.ticket_number
@@ -110,11 +106,12 @@ class ZtpWorkflow:
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=retry_policy(),
         )
+        if not activation.get("ok", False):
+            return "activation_failed"
         return "active"
 
     @workflow.signal
     def device_callback(self, payload: CallbackPayload) -> None:
-        # Only the first callback wins; a duplicate callback is ignored.
         if self._callback is None:
             self._callback = payload
 

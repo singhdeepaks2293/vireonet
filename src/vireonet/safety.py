@@ -67,6 +67,37 @@ class DeviceLockService:
             raise
         return acquired
 
+    async def renew_all(self, devices: list[str], ticket: str) -> bool:
+        """Extend leases only when every requested lock is still owned by ticket.
+
+        Returns False rather than recreating a missing/expired lock. A caller
+        must stop and reconcile an uncertain execution if ownership is lost.
+        """
+        now = datetime.now(UTC)
+        expires = now + timedelta(seconds=self.ttl_seconds)
+        async with self._sessions() as session:
+            rows = list(
+                (
+                    await session.execute(
+                        select(DeviceLock).where(
+                            DeviceLock.device.in_(devices),
+                            DeviceLock.ticket_number == ticket,
+                        )
+                    )
+                ).scalars().all()
+            )
+            if len(rows) != len(set(devices)):
+                return False
+            for row in rows:
+                current = row.expires_at
+                current = current.replace(tzinfo=UTC) if current.tzinfo is None else current
+                if current <= now:
+                    return False
+            for row in rows:
+                row.expires_at = expires
+            await session.commit()
+            return True
+
     async def release(self, device: str, ticket: str) -> None:
         async with self._sessions() as session:
             await session.execute(

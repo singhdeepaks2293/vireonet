@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { api } from "./api";
+import { clearAccessToken, getAccessToken, setAccessToken } from "./token-store";
 
 export type Role = "viewer" | "operator" | "approver" | "admin";
 
@@ -34,14 +35,14 @@ interface AuthState {
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem("vireonet-token"));
+  const [token, setToken] = useState<string | null>(() => getAccessToken());
   const login = async (username: string, password: string) => {
     const res = await api.login({ username, password });
-    localStorage.setItem("vireonet-token", res.access_token);
+    setAccessToken(res.access_token);
     setToken(res.access_token);
   };
   const logout = () => {
-    localStorage.removeItem("vireonet-token");
+    clearAccessToken();
     setToken(null);
   };
   const role: Role = token ? roleFromToken(token) : "viewer";

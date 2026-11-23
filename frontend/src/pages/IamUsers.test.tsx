@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import IamUsers from "./IamUsers";
 import { AuthProvider } from "../lib/auth";
+import { setAccessToken } from "../lib/token-store";
 
 vi.mock("../lib/api", async (orig) => {
   const actual = await orig() as Record<string, unknown>;
@@ -30,7 +31,7 @@ function tokenFor(role: string): string {
 }
 
 function renderPage() {
-  localStorage.setItem("vireonet-token", tokenFor("admin"));
+  setAccessToken(tokenFor("admin"));
   const qc = new QueryClient();
   return render(<QueryClientProvider client={qc}><AuthProvider><MemoryRouter initialEntries={["/iam"]}><IamUsers /></MemoryRouter></AuthProvider></QueryClientProvider>);
 }

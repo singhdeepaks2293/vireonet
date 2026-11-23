@@ -190,6 +190,17 @@ async def signal_approval(
     service: ChangeService = Depends(get_service),
     _role: str = Depends(require_role("approver")),
 ) -> dict[str, str]:
+    # In real mode, an approver must have a persisted per-device config diff.
+    # An empty diff is valid evidence; absence of a diff record is not.
+    if payload.approved and request.app.state.settings.adapter_mode == "real":
+        detail = await service.get_detail(change_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="change not found")
+        if not detail.get("diff_summary"):
+            raise HTTPException(
+                status_code=409,
+                detail="capture and review the pre-change config diff before approving",
+            )
     return await _signal(request, change_id, "approval", payload, service)
 
 
@@ -296,6 +307,22 @@ async def get_change_detail(
     )
 
 
+@router.post("/changes/{change_id}/collect-before", status_code=200)
+async def collect_before_change(
+    change_id: str,
+    service: ChangeService = Depends(get_service),
+    user: Any = Depends(require_role("operator")),
+) -> dict[str, Any]:
+    """Capture running config and persist real candidate diffs for review."""
+    try:
+        results = await service.collect_before_change(change_id, actor=user.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — collection failure must be visible
+        raise HTTPException(status_code=502, detail=f"pre-change collection failed: {exc}") from exc
+    return {"change_id": change_id, "devices": results, "status": "collected"}
+
+
 class ReconcileOverrideRequest(BaseModel):
     reason: str
 
@@ -341,6 +368,32 @@ async def reconcile_override(
         ticket_number=change.ticket_number,
         state=str(change.state.value if hasattr(change.state, "value") else change.state),
         status="override-recorded",
+    )
+
+
+@router.post("/changes/{change_id}/retry-close", status_code=200, response_model=ReconcileOverrideResponse)
+async def retry_close(
+    change_id: str,
+    request: Request,
+    service: ChangeService = Depends(get_service),
+    user: Any = Depends(require_role("approver")),
+) -> ReconcileOverrideResponse:
+    """Retry ServiceNow/NetBox closure after an earlier external failure."""
+    try:
+        change = await service.retry_close(
+            change_id, actor=user.username, reason="operator-approved closure retry"
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — preserve closure_pending and surface retry failure
+        raise HTTPException(status_code=502, detail=f"external closure retry failed: {exc}") from exc
+    if change is None:
+        raise HTTPException(status_code=404, detail="change not found")
+    return ReconcileOverrideResponse(
+        id=str(change.id),
+        ticket_number=change.ticket_number,
+        state=str(change.state.value if hasattr(change.state, "value") else change.state),
+        status="closed",
     )
 
 

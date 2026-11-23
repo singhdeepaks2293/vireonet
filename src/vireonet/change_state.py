@@ -21,6 +21,7 @@ class ChangeState(StrEnum):
     RECONCILING = "reconciling"
     RECONCILIATION_PENDING = "reconciliation_pending"
     RECONCILED = "reconciled"
+    CLOSURE_PENDING = "closure_pending"
     CLOSED = "closed"
     # Failure exits (terminal)
     REJECTED = "rejected"

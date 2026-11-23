@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { getAccessToken } from "./token-store";
 import type {
   AdapterHealth,
   AdapterSettingResponse,
@@ -18,7 +19,6 @@ import type {
 } from "./api-types";
 
 const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
-const TOKEN = (import.meta.env.VITE_API_TOKEN as string | undefined) ?? "";
 
 export class ApiError extends Error {
   status: number;
@@ -30,7 +30,7 @@ export class ApiError extends Error {
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const token = localStorage.getItem("vireonet-token") ?? TOKEN;
+  const token = getAccessToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!res.ok) {
@@ -79,6 +79,16 @@ export const api = {
   listChanges: (filters: ChangeFilters) => request<PaginatedChanges>(`/changes${buildChangeQuery(filters)}`),
   getChange: (id: string) => request<ChangeResponse>(`/changes/${id}`),
   getDetail: (id: string) => request<ChangeDetailResponse>(`/changes/${id}/detail`),
+  retryClose: (id: string) =>
+    request<{ id: string; ticket_number: string; state: string; status: string }>(
+      `/changes/${id}/retry-close`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+  collectBeforeChange: (id: string) =>
+    request<{ change_id: string; devices: { device: string; running_version: number; added: number; removed: number; is_empty: boolean }[]; status: string }>(
+      `/changes/${id}/collect-before`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
   rollback: (id: string) =>
     request(`/changes/${id}/signals/rollback`, { method: "POST", body: JSON.stringify({}) }),
   createChange: (body: unknown) => request<ChangeResponse>("/changes", { method: "POST", body: JSON.stringify(body) }),

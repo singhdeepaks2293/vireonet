@@ -97,6 +97,8 @@ async def main() -> None:
         monitoring_silence_minutes=settings.monitoring_silence_minutes,
         engine=execution_engine,
         reconciliation=reconciliation,
+        config_store=config_store,
+        enforce_prechange_diff=settings.adapter_mode == "real",
     )
     ztp_service = ZtpService(
         sessions,
@@ -114,6 +116,9 @@ async def main() -> None:
         tftp_server=settings.dhcp_tftp_server,
         http_base_url=settings.dhcp_http_base_url,
         pnp_server_url=settings.dhcp_pnp_server_url,
+        dhcp_server=settings.dhcp_server,
+        ip_pool=settings.ztp_ip_pool,
+        management_interface=settings.ztp_management_interface,
         policy=policy,
         engine=execution_engine,
         config_store=config_store,

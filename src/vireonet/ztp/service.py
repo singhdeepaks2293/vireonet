@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
@@ -41,12 +40,16 @@ class ZtpService:
             ).scalar_one_or_none()
             if existing is not None:
                 return existing, False
-            # NetBox is the source of truth — the device must exist there.
-            # If it does not, create it as staged (M2 create_device needs IDs;
-            # callers that already created it in NetBox skip this path).
-            # Local registration still proceeds; NetBox creation is a separate step in M2.
-            with suppress(Exception):
-                await self._netbox.get_device(hostname)
+            # NetBox is the source of truth. Never create a local ZTP record
+            # when the authoritative inventory lookup is unavailable or mismatched.
+            try:
+                netbox_device = await self._netbox.get_device(hostname)
+            except Exception as exc:  # noqa: BLE001 — inventory failure must fail closed
+                raise ValueError(f"device {hostname!r} must exist in NetBox before ZTP") from exc
+            if netbox_device.serial and netbox_device.serial != serial:
+                raise ValueError(
+                    f"NetBox serial mismatch for {hostname}: {netbox_device.serial!r} != {serial!r}"
+                )
             device = ZtpDevice(
                 hostname=hostname,
                 serial=serial,
@@ -81,7 +84,9 @@ class ZtpService:
         """Single-use, expiry-checked, constant-time. Marks used on success."""
         async with self._sessions() as session:
             device = (
-                await session.execute(select(ZtpDevice).where(ZtpDevice.serial == serial))
+                await session.execute(
+                    select(ZtpDevice).where(ZtpDevice.serial == serial).with_for_update()
+                )
             ).scalar_one_or_none()
             if device is None or not device.token_hash or device.token_used:
                 return False

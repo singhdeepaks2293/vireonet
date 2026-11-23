@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import App from "../App";
+import { clearAccessToken, setAccessToken } from "../lib/token-store";
 
 vi.mock("../lib/api", async (orig) => {
   const actual = await orig() as Record<string, unknown>;
@@ -25,13 +26,13 @@ function renderApp() {
 
 describe("Shell", () => {
   it("redirects unauthenticated users to login", () => {
-    localStorage.clear();
+    clearAccessToken();
     renderApp();
     expect(screen.getByText(/Sign in with your username and password/)).toBeInTheDocument();
   });
 
   it("shows nav and navigates to each section after login", async () => {
-    localStorage.setItem("vireonet-token", tokenFor("approver"));
+    setAccessToken(tokenFor("approver"));
     renderApp();
     expect(screen.getByRole("link", { name: "ZTP devices" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "System health" })).toBeInTheDocument();
@@ -42,7 +43,7 @@ describe("Shell", () => {
   });
 
   it("has a skip link and theme toggle", async () => {
-    localStorage.setItem("vireonet-token", tokenFor("viewer"));
+    setAccessToken(tokenFor("viewer"));
     renderApp();
     expect(screen.getByText("Skip to main content")).toBeInTheDocument();
     const toggle = screen.getByRole("button", { name: "Toggle theme" });
