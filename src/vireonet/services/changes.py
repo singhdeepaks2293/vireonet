@@ -508,6 +508,8 @@ class ChangeService:
                 reconciliation_status = "reconciled"
             elif state_value == "reconciliation_pending":
                 reconciliation_status = "reconciliation_pending"
+            elif state_value == "closure_pending":
+                reconciliation_status = "closure_pending"
             drift_count = int(
                 (
                     await session.execute(
