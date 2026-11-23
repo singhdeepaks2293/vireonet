@@ -4,7 +4,6 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./styles/tokens.css";
-import "./test-setup";
 
 const queryClient = new QueryClient();
 const root = document.getElementById("root");
