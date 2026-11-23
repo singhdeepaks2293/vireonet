@@ -54,7 +54,8 @@ LEGAL_TRANSITIONS: dict[ChangeState, frozenset[ChangeState]] = {
         {ChangeState.RECONCILED, ChangeState.RECONCILIATION_PENDING, ChangeState.FAILED}
     ),
     ChangeState.RECONCILIATION_PENDING: frozenset({ChangeState.RECONCILING, ChangeState.FAILED}),
-    ChangeState.RECONCILED: frozenset({ChangeState.CLOSED}),
+    ChangeState.RECONCILED: frozenset({ChangeState.CLOSED, ChangeState.CLOSURE_PENDING}),
+    ChangeState.CLOSURE_PENDING: frozenset({ChangeState.CLOSED, ChangeState.FAILED}),
     ChangeState.CLOSED: frozenset(),
     ChangeState.REJECTED: frozenset(),
     ChangeState.CI_FAILED: frozenset(),
