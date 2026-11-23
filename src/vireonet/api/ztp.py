@@ -127,6 +127,11 @@ async def register_device(
         platform=payload.platform,
         site=payload.site,
     )
+    if not created:
+        raise HTTPException(
+            status_code=409,
+            detail="device is already registered; use the authenticated retry operation to re-provision",
+        )
     token = await svc.issue_token(payload.serial)
     temporal = request.app.state.temporal_client
     if temporal is not None and created:
