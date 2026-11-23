@@ -97,6 +97,8 @@ async def main() -> None:
         monitoring_silence_minutes=settings.monitoring_silence_minutes,
         engine=execution_engine,
         reconciliation=reconciliation,
+        config_store=config_store,
+        enforce_prechange_diff=settings.adapter_mode == "real",
     )
     ztp_service = ZtpService(
         sessions,
