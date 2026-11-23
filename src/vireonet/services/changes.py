@@ -522,7 +522,11 @@ class ChangeService:
             return {
                 "change": change,
                 "transitions": transitions,
-                "intent": change.intent,
+                "intent": {
+                    key: value
+                    for key, value in (change.intent or {}).items()
+                    if not key.startswith("_vireonet_")
+                },
                 "diff": diff,
                 "diff_summary": diff_summary,
                 "checks": checks,
