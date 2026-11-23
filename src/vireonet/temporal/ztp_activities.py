@@ -132,7 +132,9 @@ class ZtpActivities:
         config = await self._dhcp.render_config([reservation], self._dhcp_server)
         if not await self._dhcp.validate_config(config):
             return {"ok": False, "error": "DHCP config failed validation"}
-        deployed = await self._dhcp.deploy(config, self._dhcp_server)
+        deployed = await self._dhcp.deploy_and_verify(
+            config, self._dhcp_server, hostname=inp.hostname
+        )
         bootstrap = render_bootstrap(
             inp.platform,
             {
