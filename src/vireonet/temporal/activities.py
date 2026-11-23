@@ -333,6 +333,13 @@ class ChangeActivities:
                         "evidence": {"device": device, "running_version": version.version},
                     }
             backups[device] = int(res["job_id"])
+            if not await self._renew_change_locks(intent):
+                await self._locks.release_all(list(intent.devices), intent.ticket_number)
+                return {
+                    "ok": False,
+                    "failures": ["device lock lease expired during pre-change backup collection"],
+                    "evidence": {"backups": backups},
+                }
         try:
             await self._persist_backup_manifest(inp.change_id, intent.ticket_number, backups)
         except Exception as exc:  # noqa: BLE001 — rollback evidence must survive worker restart
