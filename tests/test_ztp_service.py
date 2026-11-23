@@ -41,16 +41,16 @@ async def test_token_single_use(tmp_path) -> None:
     svc, engine = await _service(tmp_path)
     await svc.register_device(
         hostname="leaf-01",
-        serial="FOC1",
+        serial="FOC1234A",
         mac_address="aa:bb:cc:dd:ee:ff",
         model="C9300",
         platform="ios-xe",
         site="dc1",
     )
-    token = await svc.issue_token("FOC1")
-    assert await svc.verify_token("FOC1", token) is True
-    assert await svc.verify_token("FOC1", token) is False  # second use fails
-    assert await svc.verify_token("FOC1", "wrong") is False
+    token = await svc.issue_token("FOC1234A")
+    assert await svc.verify_token("FOC1234A", token) is True
+    assert await svc.verify_token("FOC1234A", token) is False  # second use fails
+    assert await svc.verify_token("FOC1234A", "wrong") is False
     await engine.dispose()
 
 
