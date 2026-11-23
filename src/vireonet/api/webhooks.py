@@ -4,7 +4,7 @@ import hmac
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
-from vireonet.api.security import verify_webhook
+from vireonet.api.security import verify_github_webhook, verify_webhook
 from vireonet.structlog_config import get_logger
 
 
@@ -124,7 +124,7 @@ async def github_webhook(
     request: Request,
     x_github_event: str | None = Header(default=None),
 ) -> dict[str, str]:
-    await verify_webhook(request, request.app.state.settings)
+    await verify_github_webhook(request, request.app.state.settings)
     payload = await request.json()
     temporal = request.app.state.temporal_client
     if x_github_event in {"check_run", "check_suite"}:
