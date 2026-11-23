@@ -551,6 +551,9 @@ class ChangeService:
         change = await self.get(change_id)
         if change is None:
             raise ValueError(f"change {change_id} not found")
+        state = ChangeState(change.state) if isinstance(change.state, str) else change.state
+        if state not in {ChangeState.VALIDATED, ChangeState.PLANNED, ChangeState.CI_PASSED}:
+            raise ValueError(f"pre-change diff capture is not legal from {state.value}")
         backup = BackupService(
             self._engine if self._engine is not None else self._awx,  # type: ignore[arg-type]
             self._config_store,
