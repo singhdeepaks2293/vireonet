@@ -16,6 +16,7 @@ from vireonet.intent import ChangeIntent, parse_intent
 from vireonet.models import AuditLog, Change, DriftRecord
 from vireonet.policy import PolicyEngine
 from vireonet.services.backup import BackupService
+from vireonet.safety import DeviceLockService
 from vireonet.state_machine import ChangeState, record_transition
 from vireonet.validation import validate_intent
 
@@ -611,6 +612,50 @@ class ChangeService:
             await session.commit()
             await session.refresh(change)
             return change
+
+    async def retry_close(
+        self, change_id: str, *, actor: str, reason: str = "operator retry"
+    ) -> Change | None:
+        """Retry external CMDB/ITSM closure for a recoverable closure_pending change."""
+        pk = _coerce_change_id(change_id)
+        if pk is None:
+            return None
+        async with self._sessions() as session:
+            change = await session.get(Change, pk)
+            if change is None:
+                return None
+            state = ChangeState(change.state) if isinstance(change.state, str) else change.state
+            if state is not ChangeState.CLOSURE_PENDING:
+                raise ValueError(f"retry close is only legal from closure_pending, not {state.value}")
+            ticket = change.ticket_number
+            devices = list(change.devices or [])
+        # External operations are deliberately idempotent and happen before
+        # the state transition. If any fails, the record remains closure_pending.
+        for device in devices:
+            await self._netbox.update_device_status(device, "active")
+            await self._netbox.add_journal_entry(
+                device, "change", f"Change {ticket} applied; closure retry confirmed."
+            )
+        await self._snow.close(ticket, f"Change {ticket} applied and post-checked.")
+        async with self._sessions() as session:
+            change = await session.get(Change, pk)
+            if change is None:
+                return None
+            state = ChangeState(change.state) if isinstance(change.state, str) else change.state
+            if state is not ChangeState.CLOSURE_PENDING:
+                raise ValueError(f"change state changed during close retry: {state.value}")
+            await record_transition(
+                session,
+                change,
+                ChangeState.CLOSED,
+                actor=actor,
+                reason=reason,
+                evidence={"servicenow": "closed", "netbox": "active"},
+            )
+            await session.commit()
+            await session.refresh(change)
+        await DeviceLockService(self._sessions).release_all(devices, ticket)
+        return change
 
     async def rollback(
         self, change_id: str, *, actor: str, reason: str = "manual rollback"
