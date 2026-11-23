@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, "src")
 
 from vireonet.config import get_settings
-from vireonet.db import get_session_factory
+from vireonet.db import create_engine, create_session_factory
 from vireonet.iam.service import UserService
 
 
@@ -17,7 +17,7 @@ async def main() -> None:
     if not username or not password:
         print("Set VIREONET_ADMIN_USER and VIREONET_ADMIN_PASSWORD (12+ chars). Nothing created.")
         return
-    svc = UserService(get_session_factory(settings))
+    svc = UserService(create_session_factory(create_engine(str(settings.database_url))))
     users = await svc.list()
     if users:
         print(f"Users already exist ({len(users)}). Nothing created.")
