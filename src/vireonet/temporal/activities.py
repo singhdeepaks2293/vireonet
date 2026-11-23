@@ -475,6 +475,13 @@ class ChangeActivities:
                     correlation_id=intent.ticket_number,
                 )
             )
+            if not collect.ok:
+                outcomes.append({
+                    "device": device,
+                    "status": "reconciliation_pending",
+                    "failures": [f"state collection failed: {collect.status.value}"],
+                })
+                continue
             outcome = await self._reconciliation.reconcile(
                 ticket=intent.ticket_number,
                 device=device,
