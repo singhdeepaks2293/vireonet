@@ -17,6 +17,7 @@ from vireonet.adapters.protocols import (
 )
 from vireonet.checks.base import CheckContext, CheckEngine
 from vireonet.checks.plugins import post_checks_for, pre_checks_for
+from vireonet.config_store.store import ConfigStore
 from vireonet.execution.awx_engine import AwxEngine
 from vireonet.execution.engine import ExecutionEngine
 from vireonet.execution.mapping import ExecutionMapping
@@ -121,6 +122,8 @@ class ChangeActivities:
         monitoring_silence_minutes: int = 60,
         engine: ExecutionEngine | None = None,
         reconciliation: ReconciliationService | None = None,
+        config_store: ConfigStore | None = None,
+        enforce_prechange_diff: bool = False,
     ) -> None:
         self._sessions = session_factory
         self._snow = servicenow
@@ -128,6 +131,8 @@ class ChangeActivities:
         self._awx = awx
         self._engine = engine if engine is not None else _default_engine(awx)
         self._reconciliation = reconciliation
+        self._config_store = config_store
+        self._enforce_prechange_diff = enforce_prechange_diff
         self._policy = policy
         self._locks = DeviceLockService(session_factory, ttl_seconds=lock_ttl_seconds)
         self._wave_size = wave_size
@@ -220,6 +225,7 @@ class ChangeActivities:
             "ok": result.ok,
             "duration_seconds": result.duration_seconds,
             "evidence": result.evidence,
+            "output": result.output,
         }
 
     def _step_request(
@@ -288,6 +294,43 @@ class ChangeActivities:
                     "failures": [f"backup failed on {device}: {res}"],
                     "evidence": {"backups": backups},
                 }
+            if self._enforce_prechange_diff:
+                if self._config_store is None:
+                    await self._locks.release_all(list(intent.devices), intent.ticket_number)
+                    return {
+                        "ok": False,
+                        "failures": ["production pre-change diff verification is not configured"],
+                        "evidence": {"device": device},
+                    }
+                raw = str(
+                    res.get("output", {}).get("stdout")
+                    or res.get("output", {}).get("stdout_tail")
+                    or ""
+                )
+                try:
+                    if BEGIN_MARKER not in raw:
+                        raise ValueError("backup output is missing VireoNet config markers")
+                    running = extract_running_config(raw)
+                    version = await self._config_store.store_running(
+                        device, running, ticket_number=intent.ticket_number
+                    )
+                    matches = await self._config_store.baseline_matches(
+                        inp.change_id, device, version.id
+                    )
+                except Exception as exc:  # noqa: BLE001 — stale/unknown baseline blocks apply
+                    await self._locks.release_all(list(intent.devices), intent.ticket_number)
+                    return {
+                        "ok": False,
+                        "failures": [f"could not verify approved baseline on {device}: {exc}"],
+                        "evidence": {"device": device},
+                    }
+                if not matches:
+                    await self._locks.release_all(list(intent.devices), intent.ticket_number)
+                    return {
+                        "ok": False,
+                        "failures": [f"running config changed after approval on {device}; recapture diff"],
+                        "evidence": {"device": device, "running_version": version.version},
+                    }
             backups[device] = int(res["job_id"])
         try:
             await self._persist_backup_manifest(inp.change_id, intent.ticket_number, backups)
