@@ -190,6 +190,17 @@ async def signal_approval(
     service: ChangeService = Depends(get_service),
     _role: str = Depends(require_role("approver")),
 ) -> dict[str, str]:
+    # In real mode, an approver must have a persisted per-device config diff.
+    # An empty diff is valid evidence; absence of a diff record is not.
+    if payload.approved and request.app.state.settings.adapter_mode == "real":
+        detail = await service.get_detail(change_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="change not found")
+        if not detail.get("diff_summary"):
+            raise HTTPException(
+                status_code=409,
+                detail="capture and review the pre-change config diff before approving",
+            )
     return await _signal(request, change_id, "approval", payload, service)
 
 
