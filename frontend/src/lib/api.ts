@@ -79,6 +79,11 @@ export const api = {
   listChanges: (filters: ChangeFilters) => request<PaginatedChanges>(`/changes${buildChangeQuery(filters)}`),
   getChange: (id: string) => request<ChangeResponse>(`/changes/${id}`),
   getDetail: (id: string) => request<ChangeDetailResponse>(`/changes/${id}/detail`),
+  retryClose: (id: string) =>
+    request<{ id: string; ticket_number: string; state: string; status: string }>(
+      `/changes/${id}/retry-close`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
   collectBeforeChange: (id: string) =>
     request<{ change_id: string; devices: { device: string; running_version: number; added: number; removed: number; is_empty: boolean }[]; status: string }>(
       `/changes/${id}/collect-before`,
