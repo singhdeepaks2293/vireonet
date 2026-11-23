@@ -79,6 +79,11 @@ export const api = {
   listChanges: (filters: ChangeFilters) => request<PaginatedChanges>(`/changes${buildChangeQuery(filters)}`),
   getChange: (id: string) => request<ChangeResponse>(`/changes/${id}`),
   getDetail: (id: string) => request<ChangeDetailResponse>(`/changes/${id}/detail`),
+  collectBeforeChange: (id: string) =>
+    request<{ change_id: string; devices: { device: string; running_version: number; added: number; removed: number; is_empty: boolean }[]; status: string }>(
+      `/changes/${id}/collect-before`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
   rollback: (id: string) =>
     request(`/changes/${id}/signals/rollback`, { method: "POST", body: JSON.stringify({}) }),
   createChange: (body: unknown) => request<ChangeResponse>("/changes", { method: "POST", body: JSON.stringify(body) }),
