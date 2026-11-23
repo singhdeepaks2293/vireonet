@@ -33,6 +33,15 @@ from vireonet.state_machine import ChangeState, record_transition
 from vireonet.validation import validate_intent
 
 
+# Built-in intent types are explicitly scoped to the NetBox object types
+# that this reconciliation service knows how to update. Unknown types remain
+# fail-closed; custom scripts must supply their own signed manifest scopes.
+_BUILTIN_RECONCILIATION_WRITES: dict[str, list[str]] = {
+    "vlan_add": ["vlan"],
+    "interface_set": ["interface"],
+}
+
+
 def _default_engine(awx: AwxProtocol) -> ExecutionEngine:
     """Engine over a raw AWX adapter, using the repo mapping when present."""
     try:
@@ -491,7 +500,9 @@ class ChangeActivities:
                 awx_job_id=collect.job_id or 0,
                 declared=list(collect.declared_changes),
                 collect_result=collect,
-                manifest_writes=[],
+                manifest_writes=list(
+                    _BUILTIN_RECONCILIATION_WRITES.get(intent.change_type, [])
+                ),
             )
             outcomes.append(
                 {
