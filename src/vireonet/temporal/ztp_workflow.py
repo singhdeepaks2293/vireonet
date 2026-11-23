@@ -87,6 +87,7 @@ class ZtpWorkflow:
             Day1Input(
                 serial=inp.serial,
                 hostname=inp.hostname,
+                mac_address=inp.mac_address,
                 model=inp.model,
                 platform=inp.platform,
                 site=inp.site,
