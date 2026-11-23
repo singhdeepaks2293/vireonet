@@ -19,7 +19,6 @@ import type {
 } from "./api-types";
 
 const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
-const TOKEN = (import.meta.env.VITE_API_TOKEN as string | undefined) ?? "";
 
 export class ApiError extends Error {
   status: number;
@@ -31,7 +30,7 @@ export class ApiError extends Error {
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const token = getAccessToken() ?? TOKEN;
+  const token = getAccessToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!res.ok) {
