@@ -15,8 +15,8 @@ from vireonet.execution.engine import ExecutionEngine
 from vireonet.intent import ChangeIntent, parse_intent
 from vireonet.models import AuditLog, Change, DriftRecord
 from vireonet.policy import PolicyEngine
-from vireonet.services.backup import BackupService
 from vireonet.safety import DeviceLockService
+from vireonet.services.backup import BackupService
 from vireonet.state_machine import ChangeState, record_transition
 from vireonet.validation import validate_intent
 
