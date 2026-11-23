@@ -5,7 +5,7 @@ services:
       POSTGRES_USER: vireonet
       POSTGRES_PASSWORD: vireonet
       POSTGRES_DB: vireonet
-    ports: ["5432:5432"]
+    ports: ["5433:5432"]
     volumes: [postgres-data:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vireonet"]
@@ -14,14 +14,13 @@ services:
       retries: 10
 
   temporal:
-    image: temporalio/auto-setup:1.26.0
+    image: temporalio/auto-setup:1.29.7
     environment:
-      DB: postgresql
+      DB: postgres12_pgx
       DB_PORT: "5432"
       POSTGRES_USER: vireonet
       POSTGRES_PWD: vireonet
       POSTGRES_SEEDS: postgres
-      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
     ports: ["7233:7233"]
     depends_on:
       postgres: { condition: service_healthy }
@@ -32,7 +31,7 @@ services:
       retries: 10
 
   temporal-ui:
-    image: temporalio/ui:2.31.0
+    image: temporalio/ui:2.34.0
     environment:
       TEMPORAL_ADDRESS: temporal:7233
     ports: ["8233:8080"]
@@ -62,6 +61,14 @@ services:
       postgres: { condition: service_healthy }
       temporal: { condition: service_healthy }
     command: ["sh", "-c", "alembic upgrade head && python -m vireonet.worker"]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    ports: ["5173:80"]
+    depends_on: [api]
 
 volumes:
   postgres-data:

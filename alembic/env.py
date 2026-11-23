@@ -11,13 +11,21 @@ from vireonet.config import get_settings
 from vireonet.db import Base
 
 config = context.config
+# alembic.ini in this repo has no [loggers]/[formatters] sections
+# (logging is configured by structlog in the app), so only apply
+# fileConfig when the ini actually contains a logging config.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    from configparser import ConfigParser
+
+    _parser = ConfigParser()
+    _parser.read(config.config_file_name)
+    if _parser.has_section("formatters"):
+        fileConfig(config.config_file_name)
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    context.configure(url=get_settings().database_url.unicode_string(), target_metadata=target_metadata, literal_binds=True)
+    context.configure(url=str(get_settings().database_url), target_metadata=target_metadata, literal_binds=True)
     with context.begin_transaction():
         context.run_migrations()
 
@@ -29,7 +37,7 @@ def do_run_migrations(connection):  # type: ignore[no-untyped-def]
 
 
 async def run_migrations_online() -> None:
-    engine = create_async_engine(get_settings().database_url.unicode_string())
+    engine = create_async_engine(str(get_settings().database_url))
     async with engine.begin() as conn:
         await conn.run_sync(do_run_migrations)
     await engine.dispose()
