@@ -136,15 +136,27 @@ class ChangeWorkflow:
             await self._transition(inp, "failed", "reconcile failed", recon)
             return "failed"
         await self._transition(inp, "reconciled", "reconciled", recon)
-        closed = await workflow.execute_activity(
-            "close_change",
-            CloseInput(change_id=inp.change_id, intent=inp.intent),
-            start_to_close_timeout=timedelta(minutes=5),
-            retry_policy=retry_policy(),
-        )
+        try:
+            closed = await workflow.execute_activity(
+                "close_change",
+                CloseInput(change_id=inp.change_id, intent=inp.intent),
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=retry_policy(),
+            )
+        except Exception as exc:  # noqa: BLE001 — keep the reconciled change recoverable
+            evidence = {"status": "closure_pending", "error": str(exc)}
+            await self._transition(
+                inp, "closure_pending", "ITSM/CMDB closure could not be confirmed", evidence
+            )
+            return "closure_pending"
         if not closed.get("ok", True):
-            await self._transition(inp, "failed", "close refused", closed)
-            return "failed"
+            await self._transition(
+                inp,
+                "closure_pending",
+                "ITSM/CMDB closure could not be confirmed",
+                closed,
+            )
+            return "closure_pending"
         await self._transition(inp, "closed", "change closed", closed)
         return "closed"
 
