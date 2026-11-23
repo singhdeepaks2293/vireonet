@@ -296,6 +296,22 @@ async def get_change_detail(
     )
 
 
+@router.post("/changes/{change_id}/collect-before", status_code=200)
+async def collect_before_change(
+    change_id: str,
+    service: ChangeService = Depends(get_service),
+    user: Any = Depends(require_role("operator")),
+) -> dict[str, Any]:
+    """Capture running config and persist real candidate diffs for review."""
+    try:
+        results = await service.collect_before_change(change_id, actor=user.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — collection failure must be visible
+        raise HTTPException(status_code=502, detail=f"pre-change collection failed: {exc}") from exc
+    return {"change_id": change_id, "devices": results, "status": "collected"}
+
+
 class ReconcileOverrideRequest(BaseModel):
     reason: str
 
