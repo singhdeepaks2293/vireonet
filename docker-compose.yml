@@ -61,7 +61,13 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       temporal: { condition: service_healthy }
-    command: ["sh", "-c", "alembic upgrade head && python -m vireonet.worker"]
+    command: ["sh", "-c", "python -m vireonet.worker"]
+    # NOTE: the worker does NOT run `alembic upgrade head`. The api and the
+    # worker used to both run migrations at startup, and they raced: both
+    # tried to CREATE TABLE device_config_versions at the same time and one
+    # died with `duplicate key ... pg_type_typname_nsp_index`. Only the api
+    # migrates; the worker just starts (it depends on postgres + temporal
+    # being healthy, and the api having migrated by then).
 
   frontend:
     build:
