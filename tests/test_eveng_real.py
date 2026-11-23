@@ -10,14 +10,26 @@ BASE = "https://eveng.example"
 
 
 def _adapter() -> EveNgAdapter:
-    return EveNgAdapter(AdapterConfig(name="eveng", base_url=BASE, max_retries=0), username="admin", password="eve")
+    return EveNgAdapter(
+        AdapterConfig(name="eveng", base_url=BASE, max_retries=0), username="admin", password="eve"
+    )
 
 
 @respx.mock
 async def test_eveng_start_get_stop_wipe() -> None:
-    respx.post(f"{BASE}/api/auth/login").mock(return_value=Response(200, json={"status": "success"}, headers={"Set-Cookie": "session=abc; Path=/"}))
-    respx.post(f"{BASE}/api/labs").mock(return_value=Response(201, json={"data": {"path": "/ci-1"}}))
-    respx.get(url__regex=r".*/api/labs/.*").mock(return_value=Response(200, json={"data": {"name": "ci-1", "status": "running", "nodes": {"leaf-01": {}}}}))
+    respx.post(f"{BASE}/api/auth/login").mock(
+        return_value=Response(
+            200, json={"status": "success"}, headers={"Set-Cookie": "session=abc; Path=/"}
+        )
+    )
+    respx.post(f"{BASE}/api/labs").mock(
+        return_value=Response(201, json={"data": {"path": "/ci-1"}})
+    )
+    respx.get(url__regex=r".*/api/labs/.*").mock(
+        return_value=Response(
+            200, json={"data": {"name": "ci-1", "status": "running", "nodes": {"leaf-01": {}}}}
+        )
+    )
     respx.post(url__regex=r".*/nodes/stop.*").mock(return_value=Response(200, json={}))
     respx.delete(url__regex=r".*/api/labs/.*").mock(return_value=Response(200, json={}))
     a = _adapter()
@@ -32,6 +44,10 @@ async def test_eveng_start_get_stop_wipe() -> None:
 @respx.mock
 async def test_eveng_wait_for_nodes() -> None:
     respx.post(f"{BASE}/api/auth/login").mock(return_value=Response(200, json={}))
-    respx.get(url__regex=r".*/api/labs/.*").mock(return_value=Response(200, json={"data": {"name": "ci-1", "status": "running", "nodes": {"leaf-01": {}}}}))
+    respx.get(url__regex=r".*/api/labs/.*").mock(
+        return_value=Response(
+            200, json={"data": {"name": "ci-1", "status": "running", "nodes": {"leaf-01": {}}}}
+        )
+    )
     lab = await _adapter().wait_for_nodes("/ci-1", timeout_seconds=5)
     assert lab.nodes == ["leaf-01"]

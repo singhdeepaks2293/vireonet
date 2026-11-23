@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,6 +17,7 @@ from vireonet.adapters.protocols import (
 )
 from vireonet.batfish_gate import run_batfish_gate
 from vireonet.intent import parse_intent
+from vireonet.policy import PolicyEngine
 from vireonet.ztp.service import ZtpService
 from vireonet.ztp.templates import render_bootstrap
 
@@ -58,10 +61,19 @@ class ActivateInput:
 
 class ZtpActivities:
     def __init__(
-        self, sessions: async_sessionmaker[AsyncSession], *, netbox: NetBoxProtocol,
-        dhcp: DhcpProtocol, awx: AwxProtocol, batfish: BatfishProtocol,
-        servicenow: ServiceNowProtocol, ztp_service: ZtpService,
-        tftp_server: str = "10.0.0.5", http_base_url: str = "http://10.0.0.5/ztp", pnp_server_url: str = "",
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        *,
+        netbox: NetBoxProtocol,
+        dhcp: DhcpProtocol,
+        awx: AwxProtocol,
+        batfish: BatfishProtocol,
+        servicenow: ServiceNowProtocol,
+        ztp_service: ZtpService,
+        tftp_server: str = "10.0.0.5",
+        http_base_url: str = "http://10.0.0.5/ztp",
+        pnp_server_url: str = "",
+        policy: PolicyEngine | None = None,
     ) -> None:
         self._sessions = sessions
         self._netbox = netbox
@@ -73,6 +85,7 @@ class ZtpActivities:
         self._tftp = tftp_server
         self._http_base = http_base_url
         self._pnp_url = pnp_server_url
+        self._policy = policy
 
     @activity.defn(name="ztp_create_reservation")
     async def create_reservation(self, inp: ReservationInput) -> dict[str, Any]:
@@ -82,33 +95,62 @@ class ZtpActivities:
         if not await self._dhcp.validate_config(config):
             return {"ok": False, "error": "DHCP config failed validation"}
         deployed = await self._dhcp.deploy(config, "isc")
-        bootstrap = render_bootstrap(inp.platform, {
-            "hostname": inp.hostname, "serial": inp.serial, "tftp_server": self._tftp,
-            "http_base_url": self._http_base, "pnp_server_url": self._pnp_url,
-            "config_file": f"{inp.hostname}.cfg", "mgmt_interface": "GigabitEthernet0/0",
-        })
+        bootstrap = render_bootstrap(
+            inp.platform,
+            {
+                "hostname": inp.hostname,
+                "serial": inp.serial,
+                "tftp_server": self._tftp,
+                "http_base_url": self._http_base,
+                "pnp_server_url": self._pnp_url,
+                "config_file": f"{inp.hostname}.cfg",
+                "mgmt_interface": "GigabitEthernet0/0",
+            },
+        )
         await self._ztp.set_stage(inp.serial, "reservation_created", ip_address=ip)
         return {"ok": True, "ip": ip, "bootstrap": bootstrap, "deployed": deployed}
 
     @activity.defn(name="ztp_verify_identity")
     async def verify_identity(self, inp: IdentityInput) -> dict[str, Any]:
-        ok, errors = await self._ztp.verify_identity(serial=inp.serial, model=inp.model, platform=inp.platform, version=inp.version or None)
+        ok, errors = await self._ztp.verify_identity(
+            serial=inp.serial, model=inp.model, platform=inp.platform, version=inp.version or None
+        )
         if inp.ip_address:
-            await self._ztp.set_stage(inp.serial, "identity_verified" if ok else "identity_failed", ip_address=inp.ip_address)
+            await self._ztp.set_stage(
+                inp.serial,
+                "identity_verified" if ok else "identity_failed",
+                ip_address=inp.ip_address,
+            )
         return {"ok": ok, "errors": errors}
 
     @activity.defn(name="ztp_day1_apply")
     async def day1_apply(self, inp: Day1Input) -> dict[str, Any]:
-        intent = parse_intent({
-            "change_type": "ztp_device", "serial": inp.serial, "model": inp.model, "platform": inp.platform,
-            "devices": [inp.hostname], "site": inp.site, "ticket_number": inp.ticket_number,
-            "requested_by": "ztp", "mac_address": "aa:bb:cc:dd:ee:ff",
-        })
-        # Batfish gate on the day-1 candidate (current config is empty for a new device).
-        gate = await run_batfish_gate(intent, {}, self._batfish)
-        if not gate["passed"]:
+        intent = parse_intent(
+            {
+                "change_type": "ztp_device",
+                "serial": inp.serial,
+                "model": inp.model,
+                "platform": inp.platform,
+                "devices": [inp.hostname],
+                "site": inp.site,
+                "ticket_number": inp.ticket_number,
+                "requested_by": "ztp",
+                "mac_address": "aa:bb:cc:dd:ee:ff",
+            }
+        )
+        # Batfish gate on the day-1 candidate (current config is empty for a new
+        # device, so there is no current snapshot and the differential falls back
+        # to a single-snapshot analyse). Only a blocking gate failure stops day-1;
+        # a non-blocking failure is recorded in the gate evidence as a warning.
+        blocking = self._policy.batfish_blocking if self._policy is not None else False
+        gate = await run_batfish_gate(intent, {}, self._batfish, blocking=blocking)
+        if gate["blocks"]:
             return {"ok": False, "error": f"Batfish gate failed: {gate['failures']}", "gate": gate}
-        job = await self._awx.launch_job("ztp-day1", {"ticket": inp.ticket_number, "hostname": inp.hostname, "serial": inp.serial}, limit=inp.hostname)
+        job = await self._awx.launch_job(
+            "ztp-day1",
+            {"ticket": inp.ticket_number, "hostname": inp.hostname, "serial": inp.serial},
+            limit=inp.hostname,
+        )
         poll = getattr(self._awx, "poll_job", None)
         if poll is not None and job.status not in {"successful", "failed", "canceled"}:
             job = await poll(job.id, timeout_seconds=600)
@@ -123,13 +165,25 @@ class ZtpActivities:
             await self._netbox.update_device_status(inp.hostname, "active")
         except Exception as exc:  # noqa: BLE001 — recorded, not fatal
             return {"ok": False, "error": str(exc)}
-        try:
-            await self._snow.close(inp.ticket_number, f"ZTP complete for {inp.hostname} ({inp.serial}).")
-        except Exception:
-            pass
+        # The device is live in NetBox now; mark it active locally before
+        # removing the reservation so remove_reservation's stage check passes.
         await self._ztp.set_stage(inp.serial, "active")
-        return {"ok": True}
+        evidence: dict[str, Any] = {}
+        try:
+            evidence["dhcp_reservation_removed"] = await self._ztp.remove_reservation(inp.serial)
+        except Exception as exc:  # noqa: BLE001 — removal failure must not un-activate the device
+            evidence["dhcp_reservation_removal_failed"] = str(exc)
+        with suppress(Exception):  # closing ServiceNow must not fail activation
+            await self._snow.close(
+                inp.ticket_number, f"ZTP complete for {inp.hostname} ({inp.serial})."
+            )
+        return {"ok": True, **evidence}
 
 
-def all_ztp_activities(activities: ZtpActivities) -> list:
-    return [activities.create_reservation, activities.verify_identity, activities.day1_apply, activities.activate]
+def all_ztp_activities(activities: ZtpActivities) -> list[Callable[..., Any]]:
+    return [
+        activities.create_reservation,
+        activities.verify_identity,
+        activities.day1_apply,
+        activities.activate,
+    ]

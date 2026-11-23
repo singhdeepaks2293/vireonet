@@ -7,7 +7,15 @@ BASE = {"devices": ["leaf-01"], "site": "dc1", "ticket_number": "RITM1", "reques
 
 
 def test_render_vlan_add() -> None:
-    intent = parse_intent({**BASE, "change_type": "vlan_add", "vlan_id": 100, "vlan_name": "web", "interfaces": ["GigabitEthernet0/1"]})
+    intent = parse_intent(
+        {
+            **BASE,
+            "change_type": "vlan_add",
+            "vlan_id": 100,
+            "vlan_name": "web",
+            "interfaces": ["GigabitEthernet0/1"],
+        }
+    )
     lines = render_intent(intent)["leaf-01"]
     assert "vlan 100" in lines and " name web" in lines
     assert " switchport access vlan 100" in lines

@@ -5,7 +5,12 @@ from pydantic import ValidationError
 
 from vireonet.intent import parse_intent
 
-BASE = {"devices": ["leaf-01"], "site": "dc1", "ticket_number": "RITM0001234", "requested_by": "alice"}
+BASE = {
+    "devices": ["leaf-01"],
+    "site": "dc1",
+    "ticket_number": "RITM0001234",
+    "requested_by": "alice",
+}
 
 
 def test_vlan_add_parses() -> None:
@@ -27,7 +32,12 @@ def test_unknown_change_type_rejected() -> None:
 def test_static_route_validates_ip() -> None:
     with pytest.raises(ValidationError):
         parse_intent(
-            {**BASE, "change_type": "static_route_add", "prefix": "not-a-prefix", "next_hop": "10.0.0.1"}
+            {
+                **BASE,
+                "change_type": "static_route_add",
+                "prefix": "not-a-prefix",
+                "next_hop": "10.0.0.1",
+            }
         )
     ok = parse_intent(
         {**BASE, "change_type": "static_route_add", "prefix": "10.1.0.0/16", "next_hop": "10.0.0.1"}
@@ -38,7 +48,13 @@ def test_static_route_validates_ip() -> None:
 def test_ztp_mac_validated() -> None:
     with pytest.raises(ValidationError):
         parse_intent(
-            {**BASE, "change_type": "ztp_device", "serial": "FOC1", "model": "C9300", "mac_address": "bad"}
+            {
+                **BASE,
+                "change_type": "ztp_device",
+                "serial": "FOC1",
+                "model": "C9300",
+                "mac_address": "bad",
+            }
         )
     ok = parse_intent(
         {

@@ -30,7 +30,9 @@ def upgrade() -> None:
     op.create_table(
         "audit_log",
         sa.Column("id", sa.Uuid(), primary_key=True),
-        sa.Column("change_id", sa.Uuid(), sa.ForeignKey("changes.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "change_id", sa.Uuid(), sa.ForeignKey("changes.id", ondelete="CASCADE"), nullable=False
+        ),
         sa.Column("from_state", sa.String(32), nullable=False),
         sa.Column("to_state", sa.String(32), nullable=False),
         sa.Column("actor", sa.String(255), nullable=False),

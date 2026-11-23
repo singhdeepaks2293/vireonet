@@ -46,7 +46,11 @@ def _device(row: dict[str, Any]) -> NetBoxDevice:
         serial=str(row.get("serial") or ""),
         model=slug(row.get("device_type")),
         site=slug(row.get("site")),
-        status=str(row.get("status", {}).get("value") if isinstance(row.get("status"), dict) else row.get("status") or ""),
+        status=str(
+            row.get("status", {}).get("value")
+            if isinstance(row.get("status"), dict)
+            else row.get("status") or ""
+        ),
         platform=slug(row.get("platform")),
         primary_ip=str(ip).split("/")[0] if ip else None,
         id=row.get("id"),
@@ -57,7 +61,9 @@ def _device(row: dict[str, Any]) -> NetBoxDevice:
 class NetBoxAdapter(BaseAdapter):
     """Real NetBox REST API adapter. Token auth: Authorization: Token <token>."""
 
-    def __init__(self, config: AdapterConfig, *, token: str = "", correlation_id: str | None = None) -> None:
+    def __init__(
+        self, config: AdapterConfig, *, token: str = "", correlation_id: str | None = None
+    ) -> None:
         super().__init__(config, correlation_id=correlation_id)
         self.token = token
 
@@ -69,19 +75,30 @@ class NetBoxAdapter(BaseAdapter):
             await self._request("GET", "/api/dcim/devices/", params={"limit": 1}, idempotent=True)
             return AdapterHealth(name=self.name, status="ok", capabilities=self.capabilities())
         except Exception as exc:  # noqa: BLE001 — health must not raise
-            return AdapterHealth(name=self.name, status="down", detail=str(exc), capabilities=self.capabilities())
+            return AdapterHealth(
+                name=self.name, status="down", detail=str(exc), capabilities=self.capabilities()
+            )
 
     async def _request(
-        self, method: str, path: str, *, params: dict[str, Any] | None = None,
-        json_body: dict[str, Any] | None = None, idempotent: bool,
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+        idempotent: bool,
     ) -> Any:
         async def do() -> Any:
             headers = {"Authorization": f"Token {self.token}"}
             if self.correlation_id:
                 headers["X-Correlation-ID"] = self.correlation_id
-            async with create_http_client(self.config, correlation_id=self.correlation_id) as client:
+            async with create_http_client(
+                self.config, correlation_id=self.correlation_id
+            ) as client:
                 try:
-                    resp = await client.request(method, path, params=params, json=json_body, headers=headers)
+                    resp = await client.request(
+                        method, path, params=params, json=json_body, headers=headers
+                    )
                 except httpx.TimeoutException as exc:
                     raise AdapterTimeout(self.name, method, str(exc)) from exc
                 except httpx.HTTPError as exc:
@@ -92,7 +109,9 @@ class NetBoxAdapter(BaseAdapter):
 
         return await self.execute_with_retry(method, do, idempotent=idempotent)
 
-    async def _get_all(self, path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    async def _get_all(
+        self, path: str, params: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
         """Follow NetBox pagination (results/next). Returns all rows."""
         out: list[dict[str, Any]] = []
         url: str | None = path
@@ -120,26 +139,57 @@ class NetBoxAdapter(BaseAdapter):
             params["site"] = site
         return [_device(r) for r in await self._get_all("/api/dcim/devices/", params)]
 
-    async def create_device(self, name: str, serial: str, site: str, status: str = "staged", device_type_id: int | None = None, role_id: int | None = None) -> NetBoxDevice:
+    async def create_device(
+        self,
+        name: str,
+        serial: str,
+        site: str,
+        status: str = "staged",
+        device_type_id: int | None = None,
+        role_id: int | None = None,
+    ) -> NetBoxDevice:
         # UNCERTAIN: NetBox requires device_type and role as IDs; there is no
         # lookup by model name in the API. Callers must resolve IDs first
         # (list via /api/dcim/device-types/?model=...), or pass them here.
         if device_type_id is None or role_id is None:
-            raise AdapterValidationError(self.name, "create_device", "device_type_id and role_id are required (NetBox needs IDs, not names)")
+            raise AdapterValidationError(
+                self.name,
+                "create_device",
+                "device_type_id and role_id are required (NetBox needs IDs, not names)",
+            )
         sites = await self._get_all("/api/dcim/sites/", {"slug": site})
         if not sites:
             raise AdapterNotFound(self.name, "create_device", f"site {site}")
-        body = {"name": name, "serial": serial, "device_type": device_type_id, "role": role_id, "site": sites[0]["id"], "status": status}
+        body = {
+            "name": name,
+            "serial": serial,
+            "device_type": device_type_id,
+            "role": role_id,
+            "site": sites[0]["id"],
+            "status": status,
+        }
         data = await self._request("POST", "/api/dcim/devices/", json_body=body, idempotent=False)
         return _device(data)
 
-    async def update_device_status(self, name: str, status: str, expected_last_updated: str | None = None) -> NetBoxDevice:
+    async def update_device_status(
+        self, name: str, status: str, expected_last_updated: str | None = None
+    ) -> NetBoxDevice:
         dev = await self.get_device(name)
-        if expected_last_updated is not None and dev.last_updated and dev.last_updated != expected_last_updated:
-            raise AdapterConflict(self.name, "update_device_status", f"{name} changed since {expected_last_updated} (now {dev.last_updated})")
+        if (
+            expected_last_updated is not None
+            and dev.last_updated
+            and dev.last_updated != expected_last_updated
+        ):
+            raise AdapterConflict(
+                self.name,
+                "update_device_status",
+                f"{name} changed since {expected_last_updated} (now {dev.last_updated})",
+            )
         if dev.id is None:
             raise AdapterNotFound(self.name, "update_device_status", name)
-        data = await self._request("PATCH", f"/api/dcim/devices/{dev.id}/", json_body={"status": status}, idempotent=True)
+        data = await self._request(
+            "PATCH", f"/api/dcim/devices/{dev.id}/", json_body={"status": status}, idempotent=True
+        )
         return _device(data)
 
     async def list_interfaces(self, device: str) -> list[str]:
@@ -155,7 +205,14 @@ class NetBoxAdapter(BaseAdapter):
             return None
         r = rows[0]
         site_slug = r.get("site", {}).get("slug") if isinstance(r.get("site"), dict) else ""
-        return NetBoxVlan(vlan_id=int(r.get("vid", vlan_id)), name=str(r.get("name", "")), site=str(site_slug), status=str(r.get("status", {}).get("value") if isinstance(r.get("status"), dict) else "active"))
+        return NetBoxVlan(
+            vlan_id=int(r.get("vid", vlan_id)),
+            name=str(r.get("name", "")),
+            site=str(site_slug),
+            status=str(
+                r.get("status", {}).get("value") if isinstance(r.get("status"), dict) else "active"
+            ),
+        )
 
     async def list_vlans(self, site: str | None = None) -> list[NetBoxVlan]:
         params: dict[str, Any] = {}
@@ -177,16 +234,35 @@ class NetBoxAdapter(BaseAdapter):
         rows = await self._get_all("/api/ipam/prefixes/", {"prefix": prefix})
         if not rows:
             raise AdapterNotFound(self.name, "allocate_ip", f"prefix {prefix}")
-        data = await self._request("POST", f"/api/ipam/prefixes/{rows[0]['id']}/available-ips/", json_body={"description": description, "status": "active"}, idempotent=False)
+        data = await self._request(
+            "POST",
+            f"/api/ipam/prefixes/{rows[0]['id']}/available-ips/",
+            json_body={"description": description, "status": "active"},
+            idempotent=False,
+        )
         return str(data.get("address", "")).split("/")[0]
 
     async def add_journal_entry(self, device: str, kind: str, comments: str) -> str:
         dev = await self.get_device(device)
-        data = await self._request("POST", "/api/extras/journal-entries/", json_body={"assigned_object_type": "dcim.device", "assigned_object_id": dev.id, "kind": kind, "comments": comments}, idempotent=False)
+        data = await self._request(
+            "POST",
+            "/api/extras/journal-entries/",
+            json_body={
+                "assigned_object_type": "dcim.device",
+                "assigned_object_id": dev.id,
+                "kind": kind,
+                "comments": comments,
+            },
+            idempotent=False,
+        )
         return str(data.get("id", ""))
 
     async def export_inventory_for_awx(self, site: str | None = None) -> dict[str, object]:
         hosts: dict[str, object] = {}
         for dev in await self.list_devices(site=site):
-            hosts[dev.name] = {"ansible_host": dev.primary_ip or dev.name, "netbox_status": dev.status, "site": dev.site}
+            hosts[dev.name] = {
+                "ansible_host": dev.primary_ip or dev.name,
+                "netbox_status": dev.status,
+                "site": dev.site,
+            }
         return {"all": {"hosts": hosts}}

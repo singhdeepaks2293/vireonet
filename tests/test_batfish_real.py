@@ -31,7 +31,12 @@ async def test_batfish_passes_on_clean_snapshot() -> None:
 
 
 async def test_batfish_fails_on_undefined_references() -> None:
-    a = BatfishAdapter(AdapterConfig(name="batfish"), session=_session_with({"undefinedReferences": [{"file": "leaf-01.cfg", "ref": "UNDEFINED"}]}))
+    a = BatfishAdapter(
+        AdapterConfig(name="batfish"),
+        session=_session_with(
+            {"undefinedReferences": [{"file": "leaf-01.cfg", "ref": "UNDEFINED"}]}
+        ),
+    )
     result = await a.analyse({"leaf-01.cfg": "x"})
     assert not result.passed and any("undefined" in f.lower() for f in result.failures)
 

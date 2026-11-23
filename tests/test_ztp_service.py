@@ -17,15 +17,36 @@ async def _service(tmp_path):  # type: ignore[no-untyped-def]
 
 async def test_register_is_idempotent_by_serial(tmp_path) -> None:
     svc, engine = await _service(tmp_path)
-    d1, created1 = await svc.register_device(hostname="leaf-01", serial="FOC1", mac_address="aa:bb:cc:dd:ee:ff", model="C9300", platform="ios-xe", site="dc1")
-    d2, created2 = await svc.register_device(hostname="leaf-01", serial="FOC1", mac_address="aa:bb:cc:dd:ee:ff", model="C9300", platform="ios-xe", site="dc1")
+    d1, created1 = await svc.register_device(
+        hostname="leaf-01",
+        serial="FOC1",
+        mac_address="aa:bb:cc:dd:ee:ff",
+        model="C9300",
+        platform="ios-xe",
+        site="dc1",
+    )
+    d2, created2 = await svc.register_device(
+        hostname="leaf-01",
+        serial="FOC1",
+        mac_address="aa:bb:cc:dd:ee:ff",
+        model="C9300",
+        platform="ios-xe",
+        site="dc1",
+    )
     assert created1 and not created2 and d1.id == d2.id
     await engine.dispose()
 
 
 async def test_token_single_use(tmp_path) -> None:
     svc, engine = await _service(tmp_path)
-    await svc.register_device(hostname="leaf-01", serial="FOC1", mac_address="aa:bb:cc:dd:ee:ff", model="C9300", platform="ios-xe", site="dc1")
+    await svc.register_device(
+        hostname="leaf-01",
+        serial="FOC1",
+        mac_address="aa:bb:cc:dd:ee:ff",
+        model="C9300",
+        platform="ios-xe",
+        site="dc1",
+    )
     token = await svc.issue_token("FOC1")
     assert await svc.verify_token("FOC1", token) is True
     assert await svc.verify_token("FOC1", token) is False  # second use fails
@@ -35,7 +56,14 @@ async def test_token_single_use(tmp_path) -> None:
 
 async def test_identity_pass_and_fail(tmp_path) -> None:
     svc, engine = await _service(tmp_path)
-    await svc.register_device(hostname="leaf-01", serial="FOC1234A", mac_address="aa:bb:cc:dd:ee:ff", model="C9300-48P", platform="ios-xe", site="dc1")
+    await svc.register_device(
+        hostname="leaf-01",
+        serial="FOC1234A",
+        mac_address="aa:bb:cc:dd:ee:ff",
+        model="C9300-48P",
+        platform="ios-xe",
+        site="dc1",
+    )
     # Fake NetBox leaf-01 is C9300-48P / FOC1234A, so this passes.
     ok, errors = await svc.verify_identity(serial="FOC1234A", model="c9300-48p", platform="ios-xe")
     assert ok, errors

@@ -4,6 +4,7 @@ Every legal transition in the spec, every illegal transition rejected,
 and one append-only audit row per transition. Uses a real SQLite DB
 via the conftest ``engine`` fixture; no network, no Temporal.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -105,8 +106,11 @@ async def test_record_transition_moves_state_and_writes_audit_row(engine) -> Non
     async with factory() as session:
         change = await _persist(session, _change())
         entry = await record_transition(
-            session, change, ChangeState.VALIDATED,
-            actor="vireonet", reason="NetBox + policy passed",
+            session,
+            change,
+            ChangeState.VALIDATED,
+            actor="vireonet",
+            reason="NetBox + policy passed",
             evidence={"devices_checked": ["leaf-01"]},
         )
         await session.commit()
@@ -141,9 +145,15 @@ async def test_full_happy_path_produces_one_audit_row_per_step(engine) -> None:
         await session.commit()
         assert change.state == ChangeState.CLOSED
         rows = (
-            await session.execute(
-                select(AuditLog).where(AuditLog.change_id == change.id).order_by(AuditLog.created_at)
+            (
+                await session.execute(
+                    select(AuditLog)
+                    .where(AuditLog.change_id == change.id)
+                    .order_by(AuditLog.created_at)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert [r.to_state for r in rows] == [t.value for _, t in HAPPY_PATH]
         assert [r.from_state for r in rows] == [f.value for f, _ in HAPPY_PATH]

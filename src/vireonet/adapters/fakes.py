@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import difflib
+from collections.abc import Callable
+
 from vireonet.adapters.base import AdapterConfig, AdapterHealth, BaseAdapter
 from vireonet.adapters.errors import AdapterNotFound, AdapterValidationError
 from vireonet.adapters.protocols import (
@@ -43,7 +46,9 @@ class FakeServiceNowAdapter(_FakeBase):
     def __init__(self) -> None:
         super().__init__("servicenow", ["read_request", "update_state", "work_notes", "close"])
         self.requests: dict[str, SNRequest] = {
-            "RITM0001234": SNRequest("RITM0001234", "Add VLAN 100", "open", "alice", {"vlan_id": "100"})
+            "RITM0001234": SNRequest(
+                "RITM0001234", "Add VLAN 100", "open", "alice", variables={"vlan_id": "100"}
+            )
         }
         self._notes_seen: set[str] = set()
 
@@ -54,7 +59,9 @@ class FakeServiceNowAdapter(_FakeBase):
         except KeyError:
             raise AdapterNotFound("servicenow", "get_request", ticket) from None
 
-    async def update_state(self, ticket: str, state: str, work_notes: str | None = None) -> SNRequest:
+    async def update_state(
+        self, ticket: str, state: str, work_notes: str | None = None
+    ) -> SNRequest:
         self._record("update_state", ticket=ticket, state=state)
         req = await self.get_request(ticket)
         req.state = state
@@ -92,7 +99,9 @@ class FakeNetBoxAdapter(_FakeBase):
     def __init__(self) -> None:
         super().__init__("netbox", ["devices", "vlans", "ips", "journal"])
         self.devices: dict[str, NetBoxDevice] = {
-            "leaf-01": NetBoxDevice("leaf-01", "FOC1234A", "C9300-48P", "dc1", "active", "ios-xe", "10.0.0.11"),
+            "leaf-01": NetBoxDevice(
+                "leaf-01", "FOC1234A", "C9300-48P", "dc1", "active", "ios-xe", "10.0.0.11"
+            ),
             "leaf-02": NetBoxDevice("leaf-02", "FOC1234B", "C9300-48P", "dc1", "staged", "ios-xe"),
         }
         self.vlans: dict[int, NetBoxVlan] = {100: NetBoxVlan(100, "web", "dc1")}
@@ -115,7 +124,15 @@ class FakeNetBoxAdapter(_FakeBase):
         dev.status = status
         return dev
 
-    async def create_device(self, name: str, serial: str, site: str, status: str = "staged", device_type_id: int | None = None, role_id: int | None = None) -> NetBoxDevice:
+    async def create_device(
+        self,
+        name: str,
+        serial: str,
+        site: str,
+        status: str = "staged",
+        device_type_id: int | None = None,
+        role_id: int | None = None,
+    ) -> NetBoxDevice:
         self._record("create_device", name=name)
         dev = NetBoxDevice(name, serial, "C9300-48P", site, status, "ios-xe")
         self.devices[name] = dev
@@ -162,7 +179,9 @@ class FakeAwxAdapter(_FakeBase):
         self._next_id = 1
         self.templates = ["backup", "pre-check", "dry-run", "apply", "post-check", "rollback"]
 
-    async def launch_job(self, template: str, extra_vars: dict[str, str], limit: str | None = None) -> AwxJob:
+    async def launch_job(
+        self, template: str, extra_vars: dict[str, str], limit: str | None = None
+    ) -> AwxJob:
         self._record("launch_job", template=template)
         if template not in self.templates:
             raise AdapterNotFound("awx", "launch_job", template)
@@ -196,7 +215,13 @@ class FakeGitLabAdapter(_FakeBase):
 
     async def create_mr(self, branch: str, title: str, files: dict[str, str]) -> GitLabMR:
         self._record("create_mr", branch=branch)
-        mr = GitLabMR(self._next_iid, title, "opened", "success", f"https://gitlab.example/mr/{self._next_iid}")
+        mr = GitLabMR(
+            self._next_iid,
+            title,
+            "opened",
+            "success",
+            f"https://gitlab.example/mr/{self._next_iid}",
+        )
         self.mrs[mr.iid] = mr
         self._next_iid += 1
         return mr
@@ -219,12 +244,82 @@ class FakeGitLabAdapter(_FakeBase):
 
 class FakeBatfishAdapter(_FakeBase):
     def __init__(self) -> None:
-        super().__init__("batfish", ["reachability", "acl", "routing", "undefined_refs"])
+        super().__init__(
+            "batfish", ["reachability", "acl", "routing", "undefined_refs", "differential"]
+        )
 
     async def analyse(self, files: dict[str, str]) -> BatfishResult:
         self._record("analyse", files=list(files))
         failures = [f"undefined reference in {k}" for k, v in files.items() if "UNDEFINED" in v]
         return BatfishResult(passed=not failures, failures=failures, evidence={"files": len(files)})
+
+    async def analyse_differential(
+        self, current_files: dict[str, str], candidate_files: dict[str, str]
+    ) -> BatfishResult:
+        """Deterministic fake differential: a removed 'permit' ACL line loses one
+        flow, an added one gains one. No current snapshot falls back to analyse()."""
+        self._record("analyse_differential", files=list(candidate_files))
+        if not current_files:
+            result = await self.analyse(candidate_files)
+            return BatfishResult(
+                passed=result.passed,
+                failures=result.failures,
+                evidence=result.evidence,
+                differential={
+                    "differential": False,
+                    "note": "no current snapshot; differential skipped",
+                },
+            )
+        lost = gained = 0
+        impact: list[dict[str, object]] = []
+        for name in sorted(set(current_files) | set(candidate_files)):
+            old = current_files.get(name, "").splitlines()
+            new = candidate_files.get(name, "").splitlines()
+            for line in difflib.unified_diff(old, new, lineterm=""):
+                if line.startswith(("---", "+++")):
+                    continue
+                if line[:1] in {"+", "-"} and "access-list" in line and "permit" in line:
+                    if line.startswith("-"):
+                        lost += 1
+                        impact.append(
+                            {
+                                "file": name,
+                                "line": line,
+                                "flows_lost": 1,
+                                "flows_gained": 0,
+                                "attribution": "fake model: permit line removed",
+                            }
+                        )
+                    else:
+                        gained += 1
+        failures = [
+            f"undefined reference in {k}" for k, v in candidate_files.items() if "UNDEFINED" in v
+        ]
+        if lost > 0:
+            failures.append(f"reachability lost: {lost} flow(s)")
+        changed_files = sorted(
+            set(current_files) ^ set(candidate_files)
+            | {k for k in candidate_files if current_files.get(k) != candidate_files.get(k)}
+        )
+        reachability: dict[str, object] = {
+            "lost": lost,
+            "gained": gained,
+            "changed": 0,
+            "total": lost + gained,
+            "lost_sample": [],
+            "gained_sample": [],
+        }
+        return BatfishResult(
+            passed=not failures,
+            failures=failures,
+            evidence={"files": len(candidate_files)},
+            differential={
+                "differential": True,
+                "reachability": reachability,
+                "acl_impact": impact,
+                "changed_files": changed_files,
+            },
+        )
 
 
 class FakeVaultAdapter(_FakeBase):
@@ -269,15 +364,37 @@ class FakeEveNgAdapter(_FakeBase):
 
 class FakeDhcpAdapter(_FakeBase):
     def __init__(self) -> None:
-        super().__init__("dhcp", ["reservation", "render_isc", "render_kea", "validate", "deploy", "reload", "verify"])
+        super().__init__(
+            "dhcp",
+            [
+                "reservation",
+                "render_isc",
+                "render_kea",
+                "validate",
+                "deploy",
+                "deploy_and_verify",
+                "reload",
+                "verify",
+                "remove_reservation",
+            ],
+        )
+        self.server = "isc"
 
     async def generate_reservation(self, hostname: str, mac: str, ip: str) -> DhcpReservation:
         self._record("generate_reservation", hostname=hostname)
         return DhcpReservation(hostname, mac, ip, "10.0.0.5", "bootstrap.cfg")
 
-    async def generate_from_netbox(self, hostname: str, *, option82_circuit: str | None = None, option82_remote: str | None = None) -> DhcpReservation:
+    async def generate_from_netbox(
+        self,
+        hostname: str,
+        *,
+        option82_circuit: str | None = None,
+        option82_remote: str | None = None,
+    ) -> DhcpReservation:
         self._record("generate_from_netbox", hostname=hostname)
-        return DhcpReservation(hostname, "aa:bb:cc:dd:ee:ff", "10.0.1.101", "10.0.0.5", "bootstrap.cfg")
+        return DhcpReservation(
+            hostname, "aa:bb:cc:dd:ee:ff", "10.0.1.101", "10.0.0.5", "bootstrap.cfg"
+        )
 
     async def render_config(self, reservations: list[DhcpReservation], server: str) -> str:
         self._record("render_config", server=server)
@@ -285,7 +402,9 @@ class FakeDhcpAdapter(_FakeBase):
             raise AdapterValidationError("dhcp", "render_config", f"unknown server {server}")
         lines = [f"# {server}"]
         for r in reservations:
-            lines.append(f"host {r.hostname} {{ hardware ethernet {r.mac_address}; fixed-address {r.ip_address}; }}")
+            lines.append(
+                f"host {r.hostname} {{ hardware ethernet {r.mac_address}; fixed-address {r.ip_address}; }}"
+            )
         return "\n".join(lines)
 
     async def validate_config(self, config_text: str) -> bool:
@@ -296,7 +415,24 @@ class FakeDhcpAdapter(_FakeBase):
         self._record("deploy", server=server)
         if not await self.validate_config(config_text):
             raise AdapterValidationError("dhcp", "deploy", "config failed validation")
-        return {"server": server, "gitlab_commit": "fake-commit", "reload_job_id": 1, "reload_status": "successful"}
+        return {
+            "server": server,
+            "gitlab_commit": "fake-commit",
+            "reload_job_id": 1,
+            "reload_status": "successful",
+        }
+
+    async def deploy_and_verify(
+        self, config_text: str, server: str, *, hostname: str
+    ) -> dict[str, object]:
+        self._record("deploy_and_verify", server=server, hostname=hostname)
+        evidence = await self.deploy(config_text, server)
+        evidence["verified"] = await self.verify_reservation(hostname, config_text)
+        return evidence
+
+    async def remove_reservation(self, hostname: str) -> dict[str, object]:
+        self._record("remove_reservation", hostname=hostname)
+        return {"server": "isc", "hostname": hostname, "removed": True, "verified": True}
 
     async def reload(self) -> dict[str, object]:
         self._record("reload")
@@ -330,7 +466,7 @@ class FakeMonitoringAdapter(_FakeBase):
         return True
 
 
-ALL_FAKE_ADAPTERS: dict[str, type[_FakeBase]] = {
+ALL_FAKE_ADAPTERS: dict[str, Callable[[], _FakeBase]] = {
     "servicenow": FakeServiceNowAdapter,
     "netbox": FakeNetBoxAdapter,
     "awx": FakeAwxAdapter,

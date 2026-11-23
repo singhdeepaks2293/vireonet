@@ -12,14 +12,24 @@ from vireonet.adapters.vault import VaultAdapter
 def _fake_hvac() -> MagicMock:
     client = MagicMock()
     client.is_authenticated.return_value = False
-    client.auth.approle.login.return_value = {"auth": {"client_token": "tok-1", "lease_duration": 3600}}
-    client.secrets.kv.v2.read_secret_version.return_value = {"data": {"data": {"token": "awx-token"}}}
+    client.auth.approle.login.return_value = {
+        "auth": {"client_token": "tok-1", "lease_duration": 3600}
+    }
+    client.secrets.kv.v2.read_secret_version.return_value = {
+        "data": {"data": {"token": "awx-token"}}
+    }
     client.auth.token.create.return_value = {"auth": {"client_token": "bootstrap-1"}}
     return client
 
 
 def _adapter(client: MagicMock) -> VaultAdapter:
-    return VaultAdapter(AdapterConfig(name="vault"), addr="https://vault.example", role_id="r", secret_id="s", client=client)
+    return VaultAdapter(
+        AdapterConfig(name="vault"),
+        addr="https://vault.example",
+        role_id="r",
+        secret_id="s",
+        client=client,
+    )
 
 
 async def test_vault_read_secret_via_approle() -> None:

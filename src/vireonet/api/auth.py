@@ -31,10 +31,18 @@ async def login(payload: LoginRequest, request: Request) -> LoginResponse:
     if user is None:
         raise HTTPException(status_code=401, detail="invalid username or password")
     settings = request.app.state.settings
-    token = create_access_token(user_id=user.id, username=user.username, role=user.role,
-                                secret=settings.jwt_secret, algorithm=settings.jwt_algorithm,
-                                expires_minutes=settings.access_token_expire_minutes)
-    return LoginResponse(access_token=token, user_id=user.id, username=user.username, role=user.role)
+    token = create_access_token(
+        user_id=user.id,
+        username=user.username,
+        role=user.role,
+        secret=settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+        expires_minutes=settings.access_token_expire_minutes,
+        token_version=int(getattr(user, "token_version", 0)),
+    )
+    return LoginResponse(
+        access_token=token, user_id=user.id, username=user.username, role=user.role
+    )
 
 
 @router.get("/auth/me")

@@ -28,6 +28,7 @@ class PolicyEngine:
     change_window_tz: str = "UTC"
     deny_delete_on_uplink: bool = True
     deny_vlan_remove_if_in_use: bool = True
+    batfish_blocking: bool = False
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> PolicyEngine:
@@ -44,6 +45,7 @@ class PolicyEngine:
             change_window_tz=str(cw.get("timezone", "UTC")),
             deny_delete_on_uplink=bool(data.get("deny_delete_on_uplink", True)),
             deny_vlan_remove_if_in_use=bool(data.get("deny_vlan_remove_if_in_use", True)),
+            batfish_blocking=bool(data.get("batfish_blocking", False)),
         )
 
     @classmethod
@@ -67,14 +69,22 @@ class PolicyEngine:
                 uplinks = sorted(set(getattr(intent, "interfaces", [])) & self.uplink_interfaces)
                 if uplinks:
                     denials.append(f"delete on uplink interface(s): {', '.join(uplinks)}")
-            if intent.change_type == "vlan_remove" and getattr(intent, "vlan_id", None) in self.protected_vlans:
-                denials.append(f"VLAN {intent.vlan_id} is protected")  # type: ignore[attr-defined]
-        if intent.change_type == "interface_set":
-            if getattr(intent, "interface", None) in self.uplink_interfaces and getattr(intent, "enabled", None) is False:
-                denials.append(f"disabling uplink interface {intent.interface} is denied")  # type: ignore[attr-defined]
+            if (
+                intent.change_type == "vlan_remove"
+                and getattr(intent, "vlan_id", None) in self.protected_vlans
+            ):
+                denials.append(f"VLAN {intent.vlan_id} is protected")
+        if intent.change_type == "interface_set" and (
+            getattr(intent, "interface", None) in self.uplink_interfaces
+            and getattr(intent, "enabled", None) is False
+        ):
+            denials.append(f"disabling uplink interface {intent.interface} is denied")
         if not emergency and self.change_window_days:
             when = now or datetime.now(ZoneInfo(self.change_window_tz))
-            if when.astimezone(ZoneInfo(self.change_window_tz)).strftime("%a") not in self.change_window_days:
+            if (
+                when.astimezone(ZoneInfo(self.change_window_tz)).strftime("%a")
+                not in self.change_window_days
+            ):
                 denials.append("outside change window: weekday not allowed")
             else:
                 hhmm = when.astimezone(ZoneInfo(self.change_window_tz)).strftime("%H:%M")

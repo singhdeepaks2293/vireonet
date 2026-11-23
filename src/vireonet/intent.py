@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ipaddress import IPv4Address, IPv4Network
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -81,12 +81,19 @@ class ZtpDeviceIntent(IntentBase):
 
 
 ChangeIntent = Annotated[
-    VlanAddIntent | VlanRemoveIntent | AclEntryAddIntent | AclEntryRemoveIntent | StaticRouteAddIntent | StaticRouteRemoveIntent | InterfaceSetIntent | ZtpDeviceIntent,
+    VlanAddIntent
+    | VlanRemoveIntent
+    | AclEntryAddIntent
+    | AclEntryRemoveIntent
+    | StaticRouteAddIntent
+    | StaticRouteRemoveIntent
+    | InterfaceSetIntent
+    | ZtpDeviceIntent,
     Field(discriminator="change_type"),
 ]
 
 
-def parse_intent(data: dict) -> ChangeIntent:
+def parse_intent(data: dict[str, Any]) -> ChangeIntent:
     """Parse raw webhook/MR payload into a validated intent. Raises ValidationError."""
     # Pydantic discriminated union: adapter validates the discriminator field.
     from pydantic import TypeAdapter

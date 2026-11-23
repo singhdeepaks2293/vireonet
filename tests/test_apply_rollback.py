@@ -11,7 +11,15 @@ from vireonet.policy import PolicyEngine
 from vireonet.state_machine import ChangeState
 from vireonet.temporal.activities import ApplyInput, ChangeActivities, CheckInput, RollbackInput
 
-INTENT = {"change_type": "vlan_add", "vlan_id": 200, "vlan_name": "new", "devices": ["leaf-01"], "site": "dc1", "ticket_number": "RITM1", "requested_by": "alice"}
+INTENT = {
+    "change_type": "vlan_add",
+    "vlan_id": 200,
+    "vlan_name": "new",
+    "devices": ["leaf-01"],
+    "site": "dc1",
+    "ticket_number": "RITM1",
+    "requested_by": "alice",
+}
 
 
 async def _activities(tmp_path):  # type: ignore[no-untyped-def]
@@ -21,9 +29,25 @@ async def _activities(tmp_path):  # type: ignore[no-untyped-def]
     factory = async_sessionmaker(engine, expire_on_commit=False)
     change_id = str(uuid.uuid4())
     async with factory() as s:
-        s.add(Change(id=uuid.UUID(change_id), ticket_number="RITM1", change_type="vlan_add", state=ChangeState.PRE_CHECKED, requester="alice", intent=INTENT, devices=["leaf-01"]))
+        s.add(
+            Change(
+                id=uuid.UUID(change_id),
+                ticket_number="RITM1",
+                change_type="vlan_add",
+                state=ChangeState.PRE_CHECKED,
+                requester="alice",
+                intent=INTENT,
+                devices=["leaf-01"],
+            )
+        )
         await s.commit()
-    acts = ChangeActivities(factory, servicenow=FakeServiceNowAdapter(), netbox=FakeNetBoxAdapter(), awx=FakeAwxAdapter(), policy=PolicyEngine.default())
+    acts = ChangeActivities(
+        factory,
+        servicenow=FakeServiceNowAdapter(),
+        netbox=FakeNetBoxAdapter(),
+        awx=FakeAwxAdapter(),
+        policy=PolicyEngine.default(),
+    )
     return acts, change_id, engine
 
 
@@ -43,6 +67,8 @@ async def test_post_check_failure_triggers_rollback_activity(tmp_path) -> None:
     # VLAN 200 is not in NetBox, so ConfigMatchesIntent post-check fails.
     post = await acts.post_check_change(CheckInput(change_id=change_id, intent=INTENT, kind="post"))
     assert not post["ok"]
-    rb = await acts.rollback_change(RollbackInput(change_id=change_id, intent=INTENT, evidence=post))
+    rb = await acts.rollback_change(
+        RollbackInput(change_id=change_id, intent=INTENT, evidence=post)
+    )
     assert rb["ok"]  # Fake AWX rollback succeeds
     await engine.dispose()

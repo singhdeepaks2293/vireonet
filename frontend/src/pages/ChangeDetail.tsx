@@ -130,7 +130,48 @@ export default function ChangeDetail() {
       {tab === "batfish" ? (
         <div>
           {Object.keys(data.batfish).length === 0 ? <p className="text-sm text-text-muted">No Batfish results yet. The Batfish gate runs in CI before approval.</p> : (
-            <pre className="mono text-sm border border-border bg-surface rounded p-4 overflow-auto">{JSON.stringify(data.batfish, null, 2)}</pre>
+            <div>
+              <p className="text-sm">
+                {data.batfish.passed ? "Passed" : "Failed"} · {data.batfish.blocking ? "blocking" : "non-blocking (failures are warnings)"}
+              </p>
+              {data.batfish.warning ? <p className="text-sm" role="alert">{data.batfish.warning}</p> : null}
+              {data.batfish.failures.length > 0 ? (
+                <ul aria-label="Batfish failures">
+                  {data.batfish.failures.map((f, i) => (
+                    <li key={i} className="text-sm text-danger">{f}</li>
+                  ))}
+                </ul>
+              ) : null}
+              {data.batfish.differential?.reachability ? (
+                <table aria-label="Reachability differential">
+                  <thead><tr><th>Flows lost</th><th>Flows gained</th><th>Flows changed</th></tr></thead>
+                  <tbody>
+                    <tr>
+                      <td className="mono">{data.batfish.differential.reachability.lost}</td>
+                      <td className="mono">{data.batfish.differential.reachability.gained}</td>
+                      <td className="mono">{data.batfish.differential.reachability.changed}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              ) : (
+                <p className="text-sm text-text-muted">No differential — no current snapshot was available.</p>
+              )}
+              {data.batfish.differential?.acl_impact && data.batfish.differential.acl_impact.length > 0 ? (
+                <table aria-label="ACL impact">
+                  <thead><tr><th>File</th><th>Changed line</th><th>Flows lost</th><th>Flows gained</th></tr></thead>
+                  <tbody>
+                    {data.batfish.differential.acl_impact.map((entry, i) => (
+                      <tr key={i}>
+                        <td className="mono">{entry.file}</td>
+                        <td className="mono">{entry.line}</td>
+                        <td className="mono">{entry.flows_lost}</td>
+                        <td className="mono">{entry.flows_gained}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : null}
+            </div>
           )}
         </div>
       ) : null}

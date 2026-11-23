@@ -3,6 +3,7 @@
 Manual steps are complete (10), job lifecycle is running -> done/failed,
 and the API token never appears in the job log. No Docker, no network.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -40,7 +41,9 @@ def test_setup_job_defaults() -> None:
 
 async def test_start_returns_running_job_and_get_finds_it() -> None:
     svc = GiteaSetupService()
-    job = svc.start(admin_user="vireonet-admin", repo="netops/intent", base_url="http://localhost:3000")
+    job = svc.start(
+        admin_user="vireonet-admin", repo="netops/intent", base_url="http://localhost:3000"
+    )
     assert job.status == "running"
     assert job.id
     assert svc.get(job.id) is job
@@ -57,7 +60,9 @@ async def test_failed_install_marks_job_failed_with_error() -> None:
     # In this sandbox Docker is absent, so install_gitea.sh exits non-zero
     # immediately. The job must record failure, not hang or claim success.
     svc = GiteaSetupService()
-    job = svc.start(admin_user="vireonet-admin", repo="netops/intent", base_url="http://localhost:3000")
+    job = svc.start(
+        admin_user="vireonet-admin", repo="netops/intent", base_url="http://localhost:3000"
+    )
     for _ in range(200):
         if svc.get(job.id).status != "running":
             break
@@ -72,7 +77,9 @@ async def test_failed_install_marks_job_failed_with_error() -> None:
 async def test_token_never_appears_in_job_log() -> None:
     # The token value must never be written to steps/error, even on failure.
     svc = GiteaSetupService()
-    job = svc.start(admin_user="vireonet-admin", repo="netops/intent", base_url="http://localhost:3000")
+    job = svc.start(
+        admin_user="vireonet-admin", repo="netops/intent", base_url="http://localhost:3000"
+    )
     for _ in range(200):
         if svc.get(job.id).status != "running":
             break

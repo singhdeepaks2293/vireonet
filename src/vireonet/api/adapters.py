@@ -34,7 +34,9 @@ def _redact_endpoint(raw: str) -> str:
 
 
 @router.get("/adapters/settings", response_model=list[AdapterSettingResponse])
-async def list_adapter_settings(request: Request, _role: str = Depends(require_role("viewer"))) -> list[AdapterSettingResponse]:
+async def list_adapter_settings(
+    request: Request, _role: str = Depends(require_role("viewer"))
+) -> list[AdapterSettingResponse]:
     registry = getattr(request.app.state, "adapters", {}) or {}
     settings = getattr(request.app.state, "settings", None)
     mode = getattr(settings, "adapter_mode", "fake") if settings is not None else "fake"
@@ -60,11 +62,16 @@ async def list_adapter_settings(request: Request, _role: str = Depends(require_r
             capabilities = list(caps)
         except Exception:
             capabilities = []
-        out.append(AdapterSettingResponse(
-            name=name, enabled=True, mode=mode, endpoint=_redact_endpoint(base_url),
-            timeout_seconds=float(timeout) if timeout is not None else None,
-            retry_max_attempts=int(retry_max) if retry_max is not None else None,
-            rate_limit_per_second=float(rate_limit) if rate_limit is not None else None,
-            capabilities=capabilities,
-        ))
+        out.append(
+            AdapterSettingResponse(
+                name=name,
+                enabled=True,
+                mode=mode,
+                endpoint=_redact_endpoint(base_url),
+                timeout_seconds=float(timeout) if timeout is not None else None,
+                retry_max_attempts=int(retry_max) if retry_max is not None else None,
+                rate_limit_per_second=float(rate_limit) if rate_limit is not None else None,
+                capabilities=capabilities,
+            )
+        )
     return sorted(out, key=lambda a: a.name)

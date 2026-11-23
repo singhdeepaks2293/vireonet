@@ -11,7 +11,9 @@ async def _service(tmp_path):  # type: ignore[no-untyped-def]
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/t.db")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    return DeviceLockService(async_sessionmaker(engine, expire_on_commit=False), ttl_seconds=3600), engine
+    return DeviceLockService(
+        async_sessionmaker(engine, expire_on_commit=False), ttl_seconds=3600
+    ), engine
 
 
 async def test_acquire_release_and_conflict(tmp_path) -> None:

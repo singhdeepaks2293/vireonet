@@ -8,7 +8,11 @@ from vireonet.adapters.monitoring import MonitoringAdapter
 
 
 def _adapter(backend: str = "alertmanager") -> MonitoringAdapter:
-    return MonitoringAdapter(AdapterConfig(name="monitoring", base_url="https://am.example", max_retries=0), backend=backend, base_url="https://am.example")
+    return MonitoringAdapter(
+        AdapterConfig(name="monitoring", base_url="https://am.example", max_retries=0),
+        backend=backend,
+        base_url="https://am.example",
+    )
 
 
 async def test_monitoring_disabled_is_noop() -> None:
@@ -19,7 +23,9 @@ async def test_monitoring_disabled_is_noop() -> None:
 
 @respx.mock
 async def test_alertmanager_silence_created() -> None:
-    route = respx.post("https://am.example/api/v2/silences").mock(return_value=Response(200, json={"silenceID": "abc-123"}))
+    route = respx.post("https://am.example/api/v2/silences").mock(
+        return_value=Response(200, json={"silenceID": "abc-123"})
+    )
     assert await _adapter().silence("leaf-01", 60) == "abc-123"
     assert route.called
     body = route.calls[0].request.content.decode()
@@ -28,6 +34,8 @@ async def test_alertmanager_silence_created() -> None:
 
 @respx.mock
 async def test_alertmanager_unsilence_deletes() -> None:
-    route = respx.delete("https://am.example/api/v2/silence/abc-123").mock(return_value=Response(200, json={}))
+    route = respx.delete("https://am.example/api/v2/silence/abc-123").mock(
+        return_value=Response(200, json={})
+    )
     await _adapter().unsilence("abc-123")
     assert route.called

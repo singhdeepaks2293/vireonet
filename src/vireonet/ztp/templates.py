@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from jinja2 import Template
 
 # UNCERTAIN — DHCP option 43 for IOS-XE PnP: the 5A sub-option format below
@@ -86,7 +88,7 @@ def encode_pnp_option43_hex(server_url: str) -> str:
     return (bytes([0x5A, len(raw)]) + raw).hex()
 
 
-def render_bootstrap(platform: str, context: dict) -> str:
+def render_bootstrap(platform: str, context: dict[str, Any]) -> str:
     """Render the day-0 bootstrap config/script for a platform."""
     templates = {"ios": IOS_TEMPLATE, "ios-xe": IOSXE_TEMPLATE, "nxos": NXOS_TEMPLATE}
     if platform not in templates:
@@ -94,8 +96,8 @@ def render_bootstrap(platform: str, context: dict) -> str:
     ctx = dict(context)
     if platform == "ios-xe" and "option_43" not in ctx:
         ctx["option_43"] = encode_pnp_option43(str(ctx.get("pnp_server_url", "")))
-    return Template(templates[platform]).render(**ctx)
+    return str(Template(templates[platform]).render(**ctx))
 
 
-def render_poap_script(context: dict) -> str:
-    return Template(POAP_SCRIPT).render(**context)
+def render_poap_script(context: dict[str, Any]) -> str:
+    return str(Template(POAP_SCRIPT).render(**context))

@@ -3,6 +3,7 @@
 Protected devices/VLANs, change window, emergency bypass (window only),
 max devices, uplink deletes. Validation against Fake NetBox (no network).
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -12,7 +13,12 @@ from vireonet.intent import parse_intent
 from vireonet.policy import PolicyEngine
 from vireonet.validation import validate_intent
 
-BASE = {"devices": ["leaf-01"], "site": "dc1", "ticket_number": "RITM0001234", "requested_by": "alice"}
+BASE = {
+    "devices": ["leaf-01"],
+    "site": "dc1",
+    "ticket_number": "RITM0001234",
+    "requested_by": "alice",
+}
 # 2026-11-23 is a Monday; 02:00 UTC is inside the default Mon-Fri 01:00-05:00 window.
 IN_WINDOW = datetime(2026, 11, 23, 2, 0, tzinfo=UTC)
 SATURDAY = datetime(2026, 11, 28, 2, 0, tzinfo=UTC)  # Saturday
@@ -39,19 +45,25 @@ def test_default_policy_loads_from_yaml() -> None:
 
 
 def test_in_window_allowed() -> None:
-    result = _policy().evaluate(_intent(change_type="vlan_add", vlan_id=200, vlan_name="test"), now=IN_WINDOW)
+    result = _policy().evaluate(
+        _intent(change_type="vlan_add", vlan_id=200, vlan_name="test"), now=IN_WINDOW
+    )
     assert result.allowed
     assert result.denials == []
 
 
 def test_saturday_denied() -> None:
-    result = _policy().evaluate(_intent(change_type="vlan_add", vlan_id=200, vlan_name="test"), now=SATURDAY)
+    result = _policy().evaluate(
+        _intent(change_type="vlan_add", vlan_id=200, vlan_name="test"), now=SATURDAY
+    )
     assert not result.allowed
     assert any("change window" in d for d in result.denials)
 
 
 def test_outside_hours_denied() -> None:
-    result = _policy().evaluate(_intent(change_type="vlan_add", vlan_id=200, vlan_name="test"), now=OUTSIDE_HOURS)
+    result = _policy().evaluate(
+        _intent(change_type="vlan_add", vlan_id=200, vlan_name="test"), now=OUTSIDE_HOURS
+    )
     assert not result.allowed
 
 
@@ -67,7 +79,9 @@ def test_emergency_bypasses_window_only() -> None:
 
 
 def test_protected_device_denied() -> None:
-    intent = _intent(change_type="vlan_add", vlan_id=200, vlan_name="test", devices=["core-01", "leaf-01"])
+    intent = _intent(
+        change_type="vlan_add", vlan_id=200, vlan_name="test", devices=["core-01", "leaf-01"]
+    )
     result = _policy().evaluate(intent, now=IN_WINDOW)
     assert not result.allowed
     assert any("core-01" in d for d in result.denials)

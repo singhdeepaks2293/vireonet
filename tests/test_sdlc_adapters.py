@@ -3,6 +3,7 @@
 Deterministic Fakes, retry only on idempotent calls, circuit breaker,
 correlation header, secrets never logged. No network.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -94,7 +95,9 @@ def test_http_client_ignores_proxy_env() -> None:
 
 
 async def test_retry_only_idempotent_calls() -> None:
-    cfg = AdapterConfig(name="t", max_retries=2, retry_base_seconds=0.001, rate_limit_per_second=1000.0)
+    cfg = AdapterConfig(
+        name="t", max_retries=2, retry_base_seconds=0.001, rate_limit_per_second=1000.0
+    )
     adapter = BaseAdapter(cfg)
     calls = {"n": 0}
 
@@ -114,7 +117,9 @@ async def test_retry_only_idempotent_calls() -> None:
 
 
 async def test_non_retryable_error_never_retried() -> None:
-    cfg = AdapterConfig(name="t", max_retries=3, retry_base_seconds=0.001, rate_limit_per_second=1000.0)
+    cfg = AdapterConfig(
+        name="t", max_retries=3, retry_base_seconds=0.001, rate_limit_per_second=1000.0
+    )
     adapter = BaseAdapter(cfg)
     calls = {"n": 0}
 
@@ -150,7 +155,12 @@ async def test_paginate_collects_all_pages() -> None:
 
 
 def test_redact_masks_secrets_recursively() -> None:
-    data = {"username": "alice", "password": "hunter2", "nested": {"token": "abc", "count": 3}, "items": [{"secret": "s"}]}
+    data = {
+        "username": "alice",
+        "password": "hunter2",
+        "nested": {"token": "abc", "count": 3},
+        "items": [{"secret": "s"}],
+    }
     out = redact(data)
     assert out["username"] == "alice"
     assert out["password"] == "***"

@@ -12,7 +12,15 @@ def test_healthz_and_adapter_health() -> None:
     body = client.get("/adapters/health").json()
     names = {a["name"] for a in body["adapters"]}
     assert names == {
-        "servicenow", "netbox", "awx", "gitlab", "batfish",
-        "vault", "eveng", "dhcp", "notification", "monitoring",
+        "servicenow",
+        "netbox",
+        "awx",
+        "gitlab",
+        "batfish",
+        "vault",
+        "eveng",
+        "dhcp",
+        "notification",
+        "monitoring",
     }
     assert all(a["status"] == "ok" for a in body["adapters"])

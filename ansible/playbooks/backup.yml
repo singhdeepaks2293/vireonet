@@ -36,3 +36,12 @@
         mode: "0640"
       delegate_to: localhost
       changed_when: false
+
+    # The BEGIN/END markers are the contract with services/backup.py:
+    # extract_running_config() reads the config from exactly this span of
+    # the job stdout. Do not rename them.
+    - name: Print running config between backup markers
+      ansible.builtin.debug:
+        msg: "VIREONET-BACKUP-BEGIN\n{{ running.stdout[0] }}\nVIREONET-BACKUP-END"
+      when: running.stdout is defined
+      changed_when: false

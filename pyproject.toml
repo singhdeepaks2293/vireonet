@@ -51,7 +51,10 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
-ignore = ["E501"]
+# B008 is a FastAPI false positive: Depends()/Query()/require_role() in
+# argument defaults is the framework's documented dependency-injection
+# pattern, not a mutable-default bug.
+ignore = ["E501", "B008"]
 
 [tool.mypy]
 python_version = "3.12"

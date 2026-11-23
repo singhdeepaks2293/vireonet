@@ -19,7 +19,9 @@ class LockHeldError(ValueError):
 
 
 class DeviceLockService:
-    def __init__(self, sessions: async_sessionmaker[AsyncSession], *, ttl_seconds: int = 1800) -> None:
+    def __init__(
+        self, sessions: async_sessionmaker[AsyncSession], *, ttl_seconds: int = 1800
+    ) -> None:
         self._sessions = sessions
         self.ttl_seconds = ttl_seconds
 
@@ -27,7 +29,9 @@ class DeviceLockService:
         """Acquire one lock. Expired locks are stolen; live locks raise LockHeldError."""
         now = datetime.now(UTC)
         async with self._sessions() as session:
-            existing = (await session.execute(select(DeviceLock).where(DeviceLock.device == device))).scalar_one_or_none()
+            existing = (
+                await session.execute(select(DeviceLock).where(DeviceLock.device == device))
+            ).scalar_one_or_none()
             if existing is not None:
                 if existing.expires_at.tzinfo is None:
                     existing_exp = existing.expires_at.replace(tzinfo=UTC)
@@ -37,7 +41,14 @@ class DeviceLockService:
                     raise LockHeldError(device, existing.ticket_number)
                 await session.delete(existing)
                 await session.flush()
-            session.add(DeviceLock(device=device, ticket_number=ticket, holder=holder, expires_at=now + timedelta(seconds=self.ttl_seconds)))
+            session.add(
+                DeviceLock(
+                    device=device,
+                    ticket_number=ticket,
+                    holder=holder,
+                    expires_at=now + timedelta(seconds=self.ttl_seconds),
+                )
+            )
             try:
                 await session.commit()
             except IntegrityError:
@@ -58,13 +69,19 @@ class DeviceLockService:
 
     async def release(self, device: str, ticket: str) -> None:
         async with self._sessions() as session:
-            await session.execute(delete(DeviceLock).where(DeviceLock.device == device, DeviceLock.ticket_number == ticket))
+            await session.execute(
+                delete(DeviceLock).where(
+                    DeviceLock.device == device, DeviceLock.ticket_number == ticket
+                )
+            )
             await session.commit()
 
     async def release_any(self, device: str) -> bool:
         """Release a lock by device only (operator action from the UI). Returns True if a lock was held."""
         async with self._sessions() as session:
-            row = (await session.execute(select(DeviceLock).where(DeviceLock.device == device))).scalar_one_or_none()
+            row = (
+                await session.execute(select(DeviceLock).where(DeviceLock.device == device))
+            ).scalar_one_or_none()
             if row is None:
                 return False
             await session.delete(row)
@@ -78,14 +95,24 @@ class DeviceLockService:
     async def list(self) -> list[DeviceLock]:
         """All locks, oldest acquired first. Includes expired locks not yet stolen."""
         async with self._sessions() as session:
-            return list((await session.execute(select(DeviceLock).order_by(DeviceLock.created_at))).scalars().all())
+            return list(
+                (await session.execute(select(DeviceLock).order_by(DeviceLock.created_at)))
+                .scalars()
+                .all()
+            )
 
     async def is_locked(self, device: str) -> str | None:
         async with self._sessions() as session:
-            row = (await session.execute(select(DeviceLock).where(DeviceLock.device == device))).scalar_one_or_none()
+            row = (
+                await session.execute(select(DeviceLock).where(DeviceLock.device == device))
+            ).scalar_one_or_none()
             if row is None:
                 return None
-            exp = row.expires_at.replace(tzinfo=UTC) if row.expires_at.tzinfo is None else row.expires_at
+            exp = (
+                row.expires_at.replace(tzinfo=UTC)
+                if row.expires_at.tzinfo is None
+                else row.expires_at
+            )
             return row.ticket_number if exp > datetime.now(UTC) else None
 
 
@@ -97,8 +124,11 @@ class WaveResult:
 
 
 async def run_waves(
-    devices: list[str], func: Callable[[list[str]], Awaitable[list[str]]],
-    *, wave_size: int = 2, abort_threshold: int = 1,
+    devices: list[str],
+    func: Callable[[list[str]], Awaitable[list[str]]],
+    *,
+    wave_size: int = 2,
+    abort_threshold: int = 1,
 ) -> WaveResult:
     """Run func per wave, sequentially. Abort remaining waves when a wave
     has >= abort_threshold failures. func returns the failed devices in the wave."""

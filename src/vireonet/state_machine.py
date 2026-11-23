@@ -10,7 +10,6 @@ from vireonet.models import AuditLog, Change
 __all__ = ["ChangeState"]
 
 
-
 TERMINAL_STATES: frozenset[ChangeState] = frozenset(
     {
         ChangeState.CLOSED,
@@ -24,13 +23,21 @@ TERMINAL_STATES: frozenset[ChangeState] = frozenset(
 
 # Exactly the transitions in the spec. Anything else is a bug, not a state.
 LEGAL_TRANSITIONS: dict[ChangeState, frozenset[ChangeState]] = {
-    ChangeState.RECEIVED: frozenset({ChangeState.VALIDATED, ChangeState.REJECTED, ChangeState.FAILED}),
-    ChangeState.VALIDATED: frozenset({ChangeState.PLANNED, ChangeState.REJECTED, ChangeState.FAILED}),
+    ChangeState.RECEIVED: frozenset(
+        {ChangeState.VALIDATED, ChangeState.REJECTED, ChangeState.FAILED}
+    ),
+    ChangeState.VALIDATED: frozenset(
+        {ChangeState.PLANNED, ChangeState.REJECTED, ChangeState.FAILED}
+    ),
     ChangeState.PLANNED: frozenset(
         {ChangeState.CI_PASSED, ChangeState.CI_FAILED, ChangeState.REJECTED, ChangeState.FAILED}
     ),
-    ChangeState.CI_PASSED: frozenset({ChangeState.APPROVED, ChangeState.REJECTED, ChangeState.FAILED}),
-    ChangeState.APPROVED: frozenset({ChangeState.PRE_CHECKED, ChangeState.REJECTED, ChangeState.FAILED}),
+    ChangeState.CI_PASSED: frozenset(
+        {ChangeState.APPROVED, ChangeState.REJECTED, ChangeState.FAILED}
+    ),
+    ChangeState.APPROVED: frozenset(
+        {ChangeState.PRE_CHECKED, ChangeState.REJECTED, ChangeState.FAILED}
+    ),
     ChangeState.PRE_CHECKED: frozenset(
         {ChangeState.APPLIED, ChangeState.PRE_CHECK_FAILED, ChangeState.FAILED}
     ),

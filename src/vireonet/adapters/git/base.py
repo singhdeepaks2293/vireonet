@@ -18,6 +18,7 @@ from vireonet.adapters.errors import (
 
 PipelineStatus = Literal["pending", "running", "success", "failed", "canceled", "unknown"]
 
+
 @dataclass
 class GitMR:
     id: int
@@ -28,6 +29,7 @@ class GitMR:
     url: str
     state: str  # opened | merged | closed
 
+
 @dataclass
 class GitPipeline:
     id: str
@@ -35,11 +37,13 @@ class GitPipeline:
     url: str
     ref: str = ""
 
+
 @dataclass
 class GitCommitResult:
     sha: str
     branch: str
     path: str
+
 
 @dataclass
 class GitFile:
@@ -47,28 +51,45 @@ class GitFile:
     content: str
     sha: str = ""
 
+
 class GitProvider(Protocol):
     """One interface for GitLab, GitHub, Bitbucket and Gitea. The workflow uses
     only these methods; provider-native field names never leak past the adapter."""
+
     @property
     def name(self) -> str: ...
     async def health_check(self) -> AdapterHealth: ...
     def capabilities(self) -> list[str]: ...
     async def get_file(self, path: str, ref: str) -> GitFile: ...
     async def create_branch(self, branch: str, from_ref: str) -> str: ...
-    async def commit_file(self, branch: str, path: str, content: str, message: str) -> GitCommitResult: ...
-    async def open_mr(self, *, source_branch: str, target_branch: str, title: str, description: str = "") -> GitMR: ...
+    async def commit_file(
+        self, branch: str, path: str, content: str, message: str
+    ) -> GitCommitResult: ...
+    async def open_mr(
+        self, *, source_branch: str, target_branch: str, title: str, description: str = ""
+    ) -> GitMR: ...
     async def get_mr(self, mr_id: int) -> GitMR: ...
     async def get_pipeline(self, mr_id: int) -> GitPipeline: ...
     async def merge_mr(self, mr_id: int) -> GitMR: ...
     async def add_comment(self, mr_id: int, body: str) -> None: ...
     async def get_mr_diff(self, mr_id: int) -> str: ...
 
+
 def normalise_pipeline_status(raw: str) -> PipelineStatus:
-    m = {"success": "success", "successful": "success", "passed": "success",
-         "failed": "failed", "failure": "failed", "error": "failed",
-         "running": "running", "pending": "pending", "created": "pending",
-         "canceled": "canceled", "cancelled": "canceled", "skipped": "canceled"}
+    m = {
+        "success": "success",
+        "successful": "success",
+        "passed": "success",
+        "failed": "failed",
+        "failure": "failed",
+        "error": "failed",
+        "running": "running",
+        "pending": "pending",
+        "created": "pending",
+        "canceled": "canceled",
+        "cancelled": "canceled",
+        "skipped": "canceled",
+    }
     return cast(PipelineStatus, m.get(raw.lower(), "unknown"))
 
 
@@ -95,7 +116,9 @@ class GitBaseAdapter(BaseAdapter):
     one _request() with retry (idempotent only), typed errors, correlation
     header, and JSON-or-text responses (diffs / raw files are text)."""
 
-    def __init__(self, config: AdapterConfig, *, token: str = "", correlation_id: str | None = None) -> None:
+    def __init__(
+        self, config: AdapterConfig, *, token: str = "", correlation_id: str | None = None
+    ) -> None:
         super().__init__(config, correlation_id=correlation_id)
         self.token = token
 
@@ -103,14 +126,21 @@ class GitBaseAdapter(BaseAdapter):
         return {}
 
     async def _request(
-        self, method: str, path: str, *, json_body: dict[str, Any] | None = None,
-        headers: dict[str, str] | None = None, idempotent: bool,
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        idempotent: bool,
     ) -> Any:
         async def do() -> Any:
             hdrs = {**self._auth_headers(), **(headers or {})}
             if self.correlation_id:
                 hdrs["X-Correlation-ID"] = self.correlation_id
-            async with create_http_client(self.config, correlation_id=self.correlation_id) as client:
+            async with create_http_client(
+                self.config, correlation_id=self.correlation_id
+            ) as client:
                 try:
                     resp = await client.request(method, path, json=json_body, headers=hdrs)
                 except httpx.TimeoutException as exc:
@@ -131,10 +161,22 @@ class GitBaseAdapter(BaseAdapter):
     async def _get(self, path: str, *, headers: dict[str, str] | None = None) -> Any:
         return await self._request("GET", path, headers=headers, idempotent=True)
 
-    async def _post(self, path: str, *, json: dict[str, Any] | None = None, headers: dict[str, str] | None = None) -> Any:
+    async def _post(
+        self,
+        path: str,
+        *,
+        json: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
         return await self._request("POST", path, json_body=json, headers=headers, idempotent=False)
 
-    async def _put(self, path: str, *, json: dict[str, Any] | None = None, headers: dict[str, str] | None = None) -> Any:
+    async def _put(
+        self,
+        path: str,
+        *,
+        json: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
         return await self._request("PUT", path, json_body=json, headers=headers, idempotent=True)
 
     async def _health(self, path: str, *, headers: dict[str, str] | None = None) -> AdapterHealth:
@@ -142,4 +184,6 @@ class GitBaseAdapter(BaseAdapter):
             await self._get(path, headers=headers)
             return AdapterHealth(name=self.name, status="ok", capabilities=self.capabilities())
         except Exception as exc:  # noqa: BLE001 - health must not raise
-            return AdapterHealth(name=self.name, status="down", detail=str(exc), capabilities=self.capabilities())
+            return AdapterHealth(
+                name=self.name, status="down", detail=str(exc), capabilities=self.capabilities()
+            )

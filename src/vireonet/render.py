@@ -12,36 +12,52 @@ def render_intent(intent: ChangeIntent) -> dict[str, list[str]]:
     for device in intent.devices:
         lines: list[str] = []
         if intent.change_type == "vlan_add":
-            lines += [f"vlan {intent.vlan_id}", f" name {intent.vlan_name}"]  # type: ignore[attr-defined]
+            lines += [f"vlan {intent.vlan_id}", f" name {intent.vlan_name}"]
             for iface in getattr(intent, "interfaces", []):
-                lines += [f"interface {iface}", " switchport mode access", f" switchport access vlan {intent.vlan_id}"]  # type: ignore[attr-defined]
+                lines += [
+                    f"interface {iface}",
+                    " switchport mode access",
+                    f" switchport access vlan {intent.vlan_id}",
+                ]
         elif intent.change_type == "vlan_remove":
-            lines += [f"no vlan {intent.vlan_id}"]  # type: ignore[attr-defined]
+            lines += [f"no vlan {intent.vlan_id}"]
         elif intent.change_type == "acl_entry_add":
-            lines += [f"ip access-list extended {intent.acl_name}", f" {intent.action} {intent.protocol} {intent.source} {intent.destination}" + (f" eq {intent.destination_port}" if getattr(intent, "destination_port", None) else "")]  # type: ignore[attr-defined]
+            lines += [
+                f"ip access-list extended {intent.acl_name}",
+                f" {intent.action} {intent.protocol} {intent.source} {intent.destination}"
+                + (
+                    f" eq {intent.destination_port}"
+                    if getattr(intent, "destination_port", None)
+                    else ""
+                ),
+            ]
         elif intent.change_type == "acl_entry_remove":
-            lines += [f"ip access-list extended {intent.acl_name}", f" no {intent.sequence}"]  # type: ignore[attr-defined]
+            lines += [f"ip access-list extended {intent.acl_name}", f" no {intent.sequence}"]
         elif intent.change_type == "static_route_add":
-            lines += [f"ip route {intent.prefix} {intent.next_hop} {getattr(intent, 'admin_distance', 1)}"]  # type: ignore[attr-defined]
+            lines += [
+                f"ip route {intent.prefix} {intent.next_hop} {getattr(intent, 'admin_distance', 1)}"
+            ]
         elif intent.change_type == "static_route_remove":
             lines += [f"no ip route {intent.prefix} {intent.next_hop}"]  # type: ignore[attr-defined]
         elif intent.change_type == "interface_set":
-            lines += [f"interface {intent.interface}"]  # type: ignore[attr-defined]
+            lines += [f"interface {intent.interface}"]
             if getattr(intent, "description", None):
-                lines.append(f" description {intent.description}")  # type: ignore[attr-defined]
+                lines.append(f" description {intent.description}")
             if getattr(intent, "enabled", None) is False:
                 lines.append(" shutdown")
             elif getattr(intent, "enabled", None) is True:
                 lines.append(" no shutdown")
             if getattr(intent, "mtu", None):
-                lines.append(f" mtu {intent.mtu}")  # type: ignore[attr-defined]
+                lines.append(f" mtu {intent.mtu}")
         elif intent.change_type == "ztp_device":
-            lines += [f"hostname {device}", f"! ztp serial {intent.serial} model {intent.model}"]  # type: ignore[attr-defined]
+            lines += [f"hostname {device}", f"! ztp serial {intent.serial} model {intent.model}"]
         per_device[device] = lines
     return per_device
 
 
-def render_candidate_configs(intent: ChangeIntent, current_configs: dict[str, str]) -> dict[str, str]:
+def render_candidate_configs(
+    intent: ChangeIntent, current_configs: dict[str, str]
+) -> dict[str, str]:
     """Candidate snapshot for Batfish: current config + intended lines per device.
 
     File per device: `<device>.cfg`. Batfish needs full configs, not diffs.

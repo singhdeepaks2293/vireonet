@@ -13,15 +13,21 @@ def _adapter(**kw) -> NotificationAdapter:  # type: ignore[no-untyped-def]
 
 @respx.mock
 async def test_slack_webhook_posts() -> None:
-    route = respx.post("https://hooks.slack.example/x").mock(return_value=Response(200, json={"ok": True}))
-    assert await _adapter(slack_webhook_url="https://hooks.slack.example/x").send("slack", "Approval needed", "body", "RITM1")
+    route = respx.post("https://hooks.slack.example/x").mock(
+        return_value=Response(200, json={"ok": True})
+    )
+    assert await _adapter(slack_webhook_url="https://hooks.slack.example/x").send(
+        "slack", "Approval needed", "body", "RITM1"
+    )
     assert route.called
 
 
 @respx.mock
 async def test_teams_webhook_posts() -> None:
     route = respx.post("https://teams.example/x").mock(return_value=Response(200, json={}))
-    assert await _adapter(teams_webhook_url="https://teams.example/x").send("teams", "Title", "body", "RITM1")
+    assert await _adapter(teams_webhook_url="https://teams.example/x").send(
+        "teams", "Title", "body", "RITM1"
+    )
     assert route.called
 
 
@@ -53,5 +59,7 @@ async def test_email_via_mocked_smtp(monkeypatch) -> None:  # type: ignore[no-un
             sent.append(msg)
 
     monkeypatch.setattr("smtplib.SMTP", FakeSMTP)
-    assert await _adapter(smtp_host="smtp.example", email_to="ops@example.com").send("email", "Title", "body", "RITM1")
+    assert await _adapter(smtp_host="smtp.example", email_to="ops@example.com").send(
+        "email", "Title", "body", "RITM1"
+    )
     assert sent and "RITM1" in str(sent[0]["Subject"])

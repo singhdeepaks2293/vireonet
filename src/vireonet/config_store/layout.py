@@ -6,12 +6,14 @@ TEMPLATES_REPO = "netops/templates"
 VARS_REPO = "netops/vars"
 NETBOX_EXPORT_REPO = "netops/netbox-export"
 
+
 def device_repo(hostname: str) -> str:
     """One repo per device. Hostname is normalised; serial is NOT in the name."""
     slug = re.sub(r"[^a-z0-9-]", "-", hostname.lower()).strip("-")
     if not slug:
         raise ValueError("hostname must contain at least one letter or digit")
     return f"netops/config-{slug}"
+
 
 def device_paths(hostname: str) -> dict[str, str]:
     return {
@@ -22,6 +24,7 @@ def device_paths(hostname: str) -> dict[str, str]:
         "metadata": "metadata.yaml",
         "netbox_export": f"netbox-export/{hostname}.jinja",
     }
+
 
 # Separation rules, enforced by TemplateStore / VarsStore / CI (policies/config_store.yaml):
 # - templates repo: *.j2 only. No .yaml with device values, no secrets, no hostnames/IPs.

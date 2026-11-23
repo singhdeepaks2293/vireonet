@@ -15,8 +15,10 @@ class Plan:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "devices": self.devices, "waves": self.waves,
-            "blast_radius": self.blast_radius, "diff_summary": self.diff_summary,
+            "devices": self.devices,
+            "waves": self.waves,
+            "blast_radius": self.blast_radius,
+            "diff_summary": self.diff_summary,
             "steps": self.steps,
         }
 
@@ -27,7 +29,9 @@ def plan(intent: ChangeIntent, *, wave_size: int = 2) -> Plan:
     Waves are sequential; devices inside a wave run in parallel. Wave size
     2 keeps blast radius small by default.
     """
-    waves = [list(intent.devices[i : i + wave_size]) for i in range(0, len(intent.devices), wave_size)]
+    waves = [
+        list(intent.devices[i : i + wave_size]) for i in range(0, len(intent.devices), wave_size)
+    ]
     summaries = {
         "vlan_add": f"add VLAN {getattr(intent, 'vlan_id', '?')} ({getattr(intent, 'vlan_name', '')})",
         "vlan_remove": f"remove VLAN {getattr(intent, 'vlan_id', '?')}",
@@ -39,7 +43,9 @@ def plan(intent: ChangeIntent, *, wave_size: int = 2) -> Plan:
         "ztp_device": f"provision {intent.devices[0]} ({getattr(intent, 'serial', '')})",
     }
     return Plan(
-        devices=list(intent.devices), waves=waves, blast_radius=len(intent.devices),
+        devices=list(intent.devices),
+        waves=waves,
+        blast_radius=len(intent.devices),
         diff_summary=summaries.get(intent.change_type, intent.change_type),
         steps=["backup", "pre-check", "dry-run", "apply", "post-check"],
     )

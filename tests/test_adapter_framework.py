@@ -70,7 +70,9 @@ async def test_http_client_sets_correlation_header() -> None:
 
 @respx.mock
 async def test_http_client_timeout_is_set() -> None:
-    route = respx.get("https://example.invalid/devices").mock(return_value=httpx.Response(200, json=[]))
+    route = respx.get("https://example.invalid/devices").mock(
+        return_value=httpx.Response(200, json=[])
+    )
     cfg = AdapterConfig(name="probe", base_url="https://example.invalid", timeout_seconds=5)
     async with create_http_client(cfg, correlation_id="RITM1") as client:
         resp = await client.get("/devices")

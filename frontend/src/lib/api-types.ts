@@ -32,12 +32,44 @@ export interface DiffLineResponse {
   type: string;
   text: string;
 }
+export interface BatfishReachabilitySummary {
+  lost: number;
+  gained: number;
+  changed: number;
+  total: number;
+  lost_sample: Record<string, unknown>[];
+  gained_sample: Record<string, unknown>[];
+}
+export interface BatfishAclImpact {
+  file: string;
+  line: string;
+  flows_lost: number;
+  flows_gained: number;
+  attribution: string;
+}
+export interface BatfishDifferential {
+  differential: boolean;
+  note?: string;
+  reachability?: BatfishReachabilitySummary;
+  changed_files?: string[];
+  acl_impact?: BatfishAclImpact[];
+}
+export interface BatfishGateResult {
+  passed: boolean;
+  blocking?: boolean;
+  blocks?: boolean;
+  failures: string[];
+  evidence?: Record<string, unknown>;
+  differential?: BatfishDifferential;
+  files?: string[];
+  warning?: string | null;
+}
 export interface ChangeDetailResponse {
   change: ChangeResponse;
   intent: Record<string, unknown>;
   diff: DiffLineResponse[];
   checks: { name: string; status: string; message: string }[];
-  batfish: Record<string, unknown>;
+  batfish: BatfishGateResult;
   awx_jobs: { job_id?: number | null; status?: string; to_state?: string }[];
   transitions: TransitionResponse[];
 }
@@ -145,4 +177,13 @@ export interface ConfigRepoResponse {
   hostname: string;
   repo: string;
   url?: string;
+}
+export interface ConfigVersionResponse {
+  device: string;
+  version: number;
+  content_hash: string;
+  ticket_number: string | null;
+  source: string;
+  created_at: string | null;
+  lines: number;
 }

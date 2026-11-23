@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 import structlog
 
 _SECRET_KEYS = {"password", "token", "secret", "api_key", "apikey", "authorization", "vault_token"}
@@ -9,8 +11,7 @@ def redact(value: object) -> object:
     """Recursively mask secret-looking keys. Never log full payloads."""
     if isinstance(value, dict):
         return {
-            str(k): "***" if str(k).lower() in _SECRET_KEYS else redact(v)
-            for k, v in value.items()
+            str(k): "***" if str(k).lower() in _SECRET_KEYS else redact(v) for k, v in value.items()
         }
     if isinstance(value, (list, tuple)):
         return [redact(v) for v in value]
@@ -32,4 +33,4 @@ def configure_logging(level: str) -> None:
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
-    return structlog.get_logger(name)
+    return cast(structlog.stdlib.BoundLogger, structlog.get_logger(name))

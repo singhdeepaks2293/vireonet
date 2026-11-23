@@ -11,3 +11,6 @@ change_window:
   # emergency=true in the webhook payload bypasses the window only, nothing else.
 deny_delete_on_uplink: true
 deny_vlan_remove_if_in_use: true
+# Batfish gate: when true, a failing gate blocks the change / fails CI.
+# When false (default), gate failures are recorded as warnings only.
+batfish_blocking: false

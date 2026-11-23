@@ -23,10 +23,12 @@ MANUAL_STEPS = [
     "10. Add the webhook: repo Settings -> Webhooks, URL https://vireonet.example.com/webhooks/gitea, events pull_request + workflow_run.",
 ]
 
+
 class InstallRequest(BaseModel):
     admin_user: str = "vireonet-admin"
     repo: str = "netops/intent"
     base_url: str = "http://localhost:3000"
+
 
 class JobResponse(BaseModel):
     id: str
@@ -34,23 +36,33 @@ class JobResponse(BaseModel):
     steps: list[dict[str, str]] = []
     error: str = ""
 
+
 def _svc(request: Request) -> GiteaSetupService:
     svc = getattr(request.app.state, "gitea_setup_service", None)
     if svc is None:
         raise HTTPException(status_code=503, detail="gitea setup service not configured")
     return cast(GiteaSetupService, svc)
 
+
 @router.get("/setup/gitea/manual")
 async def manual_steps(_admin: CurrentUser = Depends(require_role("admin"))) -> dict[str, Any]:
     return {"steps": MANUAL_STEPS}
 
+
 @router.post("/setup/gitea/install", status_code=202, response_model=JobResponse)
-async def install(payload: InstallRequest, request: Request, _admin: CurrentUser = Depends(require_role("admin"))) -> JobResponse:
-    job = _svc(request).start(admin_user=payload.admin_user, repo=payload.repo, base_url=payload.base_url)
+async def install(
+    payload: InstallRequest, request: Request, _admin: CurrentUser = Depends(require_role("admin"))
+) -> JobResponse:
+    job = _svc(request).start(
+        admin_user=payload.admin_user, repo=payload.repo, base_url=payload.base_url
+    )
     return JobResponse(id=job.id, status=job.status, steps=job.steps)
 
+
 @router.get("/setup/gitea/status/{job_id}", response_model=JobResponse)
-async def status(job_id: str, request: Request, _admin: CurrentUser = Depends(require_role("admin"))) -> JobResponse:
+async def status(
+    job_id: str, request: Request, _admin: CurrentUser = Depends(require_role("admin"))
+) -> JobResponse:
     job = _svc(request).get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="setup job not found")

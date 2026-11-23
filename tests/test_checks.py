@@ -15,13 +15,23 @@ BASE = {"devices": ["leaf-01"], "site": "dc1", "ticket_number": "RITM1", "reques
 
 
 def _ctx(intent, **kw):  # type: ignore[no-untyped-def]
-    return CheckContext(intent=intent, ticket_number="RITM1", netbox=FakeNetBoxAdapter(), awx=FakeAwxAdapter(), **kw)
+    return CheckContext(
+        intent=intent, ticket_number="RITM1", netbox=FakeNetBoxAdapter(), awx=FakeAwxAdapter(), **kw
+    )
 
 
 async def test_reachability_pass_and_fail() -> None:
     intent = parse_intent({**BASE, "change_type": "vlan_add", "vlan_id": 200, "vlan_name": "new"})
     assert (await ReachabilityCheck().run(_ctx(intent))).ok
-    bad = parse_intent({**BASE, "devices": ["ghost"], "change_type": "vlan_add", "vlan_id": 200, "vlan_name": "new"})
+    bad = parse_intent(
+        {
+            **BASE,
+            "devices": ["ghost"],
+            "change_type": "vlan_add",
+            "vlan_id": 200,
+            "vlan_name": "new",
+        }
+    )
     assert not (await ReachabilityCheck().run(_ctx(bad))).ok
 
 
@@ -34,10 +44,15 @@ async def test_backup_check_requires_backup() -> None:
 async def test_engine_all_pass_and_fail_fast() -> None:
     # VLAN 100 is the one the fake NetBox seeds, so the post-check can find it.
     intent = parse_intent({**BASE, "change_type": "vlan_add", "vlan_id": 100, "vlan_name": "web"})
-    results = await CheckEngine().run(pre_checks_for(intent), _ctx(intent, backups={"leaf-01": 1}, baseline={"x": 1}))
+    results = await CheckEngine().run(
+        pre_checks_for(intent), _ctx(intent, backups={"leaf-01": 1}, baseline={"x": 1})
+    )
     # pre-checks include backup + baseline, both satisfied here, plus reachability/interface.
     assert CheckEngine.all_pass(results), [r.message for r in results]
-    post = await CheckEngine().run(post_checks_for(intent), _ctx(intent, backups={"leaf-01": 1}, baseline={"dry_run_job_id": 1}))
+    post = await CheckEngine().run(
+        post_checks_for(intent),
+        _ctx(intent, backups={"leaf-01": 1}, baseline={"dry_run_job_id": 1}),
+    )
     assert CheckEngine.all_pass(post), [r.message for r in post]
 
 

@@ -37,7 +37,14 @@ class EveNgAdapter(BaseAdapter):
     """Real EVE-NG adapter. Cookie auth via /api/auth/login. Labs are always
     wiped in a finally by the caller (see scripts/eveng_smoke.py)."""
 
-    def __init__(self, config: AdapterConfig, *, username: str = "", password: str = "", correlation_id: str | None = None) -> None:
+    def __init__(
+        self,
+        config: AdapterConfig,
+        *,
+        username: str = "",
+        password: str = "",
+        correlation_id: str | None = None,
+    ) -> None:
         super().__init__(config, correlation_id=correlation_id)
         self.username = username
         self.password = password
@@ -51,28 +58,40 @@ class EveNgAdapter(BaseAdapter):
             await self._ensure_auth()
             return AdapterHealth(name=self.name, status="ok", capabilities=self.capabilities())
         except Exception as exc:  # noqa: BLE001
-            return AdapterHealth(name=self.name, status="down", detail=str(exc), capabilities=self.capabilities())
+            return AdapterHealth(
+                name=self.name, status="down", detail=str(exc), capabilities=self.capabilities()
+            )
 
     async def _ensure_auth(self) -> None:
         if self._cookies:
             return
         async with create_http_client(self.config, correlation_id=self.correlation_id) as client:
             try:
-                resp = await client.post("/api/auth/login", json={"username": self.username, "password": self.password})
+                resp = await client.post(
+                    "/api/auth/login", json={"username": self.username, "password": self.password}
+                )
             except httpx.TimeoutException as exc:
                 raise AdapterTimeout(self.name, "login", str(exc)) from exc
             if resp.status_code >= 400:
                 raise _map_status(resp.status_code, self.name, "login", resp.text[:500])
             self._cookies = {k: v for k, v in resp.cookies.items()}
 
-    async def _request(self, method: str, path: str, *, json_body: dict[str, Any] | None = None, idempotent: bool) -> Any:
+    async def _request(
+        self, method: str, path: str, *, json_body: dict[str, Any] | None = None, idempotent: bool
+    ) -> Any:
         await self._ensure_auth()
 
         async def do() -> Any:
-            headers = {"Cookie": "; ".join(f"{k}={v}" for k, v in self._cookies.items())} if self._cookies else {}
+            headers = (
+                {"Cookie": "; ".join(f"{k}={v}" for k, v in self._cookies.items())}
+                if self._cookies
+                else {}
+            )
             if self.correlation_id:
                 headers["X-Correlation-ID"] = self.correlation_id
-            async with create_http_client(self.config, correlation_id=self.correlation_id) as client:
+            async with create_http_client(
+                self.config, correlation_id=self.correlation_id
+            ) as client:
                 try:
                     resp = await client.request(method, path, json=json_body, headers=headers)
                 except httpx.TimeoutException as exc:
@@ -89,7 +108,12 @@ class EveNgAdapter(BaseAdapter):
         # topology is a .unl file path or inline topology name. EVE-NG creates
         # a lab, then nodes are added from the topology file via the UI/API.
         # This adapter creates the lab and returns it; load_topology adds nodes.
-        data = await self._request("POST", "/api/labs", json_body={"path": "/", "name": name, "version": "1"}, idempotent=False)
+        data = await self._request(
+            "POST",
+            "/api/labs",
+            json_body={"path": "/", "name": name, "version": "1"},
+            idempotent=False,
+        )
         lab_id = str(data.get("data", {}).get("path", f"/{name}"))
         return EveLab(id=lab_id, name=name, status="starting", nodes=[])
 
@@ -109,7 +133,12 @@ class EveNgAdapter(BaseAdapter):
         info = data.get("data", data) if isinstance(data, dict) else {}
         nodes = info.get("nodes", {}) if isinstance(info, dict) else {}
         node_names = list(nodes.keys()) if isinstance(nodes, dict) else []
-        return EveLab(id=lab_id, name=str(info.get("name", lab_id)), status=str(info.get("status", "running")), nodes=node_names)
+        return EveLab(
+            id=lab_id,
+            name=str(info.get("name", lab_id)),
+            status=str(info.get("status", "running")),
+            nodes=node_names,
+        )
 
     async def wait_for_nodes(self, lab_id: str, *, timeout_seconds: int = 600) -> EveLab:
         deadline = time.monotonic() + timeout_seconds
@@ -118,12 +147,16 @@ class EveNgAdapter(BaseAdapter):
             if lab.status in {"running", "started"} or lab.nodes:
                 return lab
             if time.monotonic() > deadline:
-                raise AdapterTimeout(self.name, "wait_for_nodes", f"lab {lab_id} did not start in {timeout_seconds}s")
+                raise AdapterTimeout(
+                    self.name, "wait_for_nodes", f"lab {lab_id} did not start in {timeout_seconds}s"
+                )
             await asyncio.sleep(10)
 
     async def stop_lab(self, lab_id: str) -> None:
         encoded = quote(lab_id, safe="")
-        await self._request("POST", f"/api/labs/{encoded}/nodes/stop", json_body={}, idempotent=True)
+        await self._request(
+            "POST", f"/api/labs/{encoded}/nodes/stop", json_body={}, idempotent=True
+        )
 
     async def wipe_lab(self, lab_id: str) -> None:
         encoded = quote(lab_id, safe="")
@@ -131,4 +164,8 @@ class EveNgAdapter(BaseAdapter):
 
     async def get_console_details(self, lab_id: str, node: str) -> dict[str, str]:
         lab = await self.get_lab(lab_id)
-        return {"lab": lab.id, "node": node, "console": f"telnet://{self.config.base_url or 'eveng'}/{lab_id}/{node}"}
+        return {
+            "lab": lab.id,
+            "node": node,
+            "console": f"telnet://{self.config.base_url or 'eveng'}/{lab_id}/{node}",
+        }

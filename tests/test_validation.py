@@ -14,7 +14,9 @@ NOW = datetime(2026, 11, 24, 2, 0, tzinfo=ZoneInfo("UTC"))
 
 async def test_vlan_add_valid() -> None:
     intent = parse_intent({**BASE, "change_type": "vlan_add", "vlan_id": 200, "vlan_name": "new"})
-    r = await validate_intent(intent, FakeNetBoxAdapter(), PolicyEngine.from_yaml("policies/default.yaml"), now=NOW)
+    r = await validate_intent(
+        intent, FakeNetBoxAdapter(), PolicyEngine.from_yaml("policies/default.yaml"), now=NOW
+    )
     assert r.ok, r.errors
 
 
@@ -25,16 +27,41 @@ async def test_vlan_add_name_conflict() -> None:
 
 
 async def test_missing_device_rejected() -> None:
-    intent = parse_intent({**BASE, "devices": ["ghost-01"], "change_type": "vlan_add", "vlan_id": 200, "vlan_name": "new"})
+    intent = parse_intent(
+        {
+            **BASE,
+            "devices": ["ghost-01"],
+            "change_type": "vlan_add",
+            "vlan_id": 200,
+            "vlan_name": "new",
+        }
+    )
     r = await validate_intent(intent, FakeNetBoxAdapter(), PolicyEngine.default(), now=NOW)
     assert not r.ok and any("ghost-01" in e for e in r.errors)
 
 
 async def test_staged_device_rejected_for_change_but_ok_for_ztp() -> None:
     # leaf-02 is staged in the Fake.
-    intent = parse_intent({**BASE, "devices": ["leaf-02"], "change_type": "vlan_add", "vlan_id": 200, "vlan_name": "new"})
+    intent = parse_intent(
+        {
+            **BASE,
+            "devices": ["leaf-02"],
+            "change_type": "vlan_add",
+            "vlan_id": 200,
+            "vlan_name": "new",
+        }
+    )
     r = await validate_intent(intent, FakeNetBoxAdapter(), PolicyEngine.default(), now=NOW)
     assert not r.ok
-    ztp = parse_intent({**BASE, "devices": ["leaf-02"], "change_type": "ztp_device", "serial": "NEW123", "model": "C9300", "mac_address": "aa:bb:cc:dd:ee:ff"})
+    ztp = parse_intent(
+        {
+            **BASE,
+            "devices": ["leaf-02"],
+            "change_type": "ztp_device",
+            "serial": "NEW123",
+            "model": "C9300",
+            "mac_address": "aa:bb:cc:dd:ee:ff",
+        }
+    )
     r2 = await validate_intent(ztp, FakeNetBoxAdapter(), PolicyEngine.default(), now=NOW)
     assert r2.ok, r2.errors

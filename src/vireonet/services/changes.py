@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import uuid
 from datetime import datetime
 from typing import Any
@@ -8,11 +9,12 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from vireonet.adapters.protocols import NetBoxProtocol, ServiceNowProtocol
+from vireonet.adapters.protocols import AwxProtocol, NetBoxProtocol, ServiceNowProtocol
+from vireonet.config_store.store import ConfigStore
 from vireonet.intent import ChangeIntent, parse_intent
 from vireonet.models import AuditLog, Change
 from vireonet.policy import PolicyEngine
-from vireonet.render import render_intent
+from vireonet.services.backup import BackupService
 from vireonet.state_machine import ChangeState, record_transition
 from vireonet.validation import validate_intent
 
@@ -31,7 +33,9 @@ class DuplicateTicketError(ValueError):
     pass
 
 
-def intent_from_servicenow_variables(ticket: str, variables: dict[str, str], requested_by: str) -> dict[str, Any]:
+def intent_from_servicenow_variables(
+    ticket: str, variables: dict[str, str], requested_by: str
+) -> dict[str, Any]:
     """Catalog-variable -> intent mapping. ONE place, per-catalog.
 
     Expected variables (catalog admin defines them): change_type, site,
@@ -40,13 +44,34 @@ def intent_from_servicenow_variables(ticket: str, variables: dict[str, str], req
     """
     devices = [d.strip() for d in (variables.get("devices") or "").split(",") if d.strip()]
     base: dict[str, Any] = {
-        "ticket_number": ticket, "requested_by": requested_by,
-        "site": variables.get("site", ""), "devices": devices,
+        "ticket_number": ticket,
+        "requested_by": requested_by,
+        "site": variables.get("site", ""),
+        "devices": devices,
         "change_type": variables.get("change_type", "vlan_add"),
     }
-    for key in ("vlan_id", "vlan_name", "acl_name", "action", "protocol", "source", "destination",
-                "destination_port", "sequence", "prefix", "next_hop", "vrf", "interface",
-                "description", "enabled", "mtu", "serial", "model", "platform", "mac_address"):
+    for key in (
+        "vlan_id",
+        "vlan_name",
+        "acl_name",
+        "action",
+        "protocol",
+        "source",
+        "destination",
+        "destination_port",
+        "sequence",
+        "prefix",
+        "next_hop",
+        "vrf",
+        "interface",
+        "description",
+        "enabled",
+        "mtu",
+        "serial",
+        "model",
+        "platform",
+        "mac_address",
+    ):
         if key in variables and variables[key] != "":
             base[key] = variables[key]
     if "vlan_id" in base:
@@ -70,17 +95,28 @@ class ChangeService:
         servicenow: ServiceNowProtocol,
         netbox: NetBoxProtocol,
         policy: PolicyEngine,
+        config_store: ConfigStore | None = None,
+        awx: AwxProtocol | None = None,
     ) -> None:
         self._sessions = session_factory
         self._snow = servicenow
         self._netbox = netbox
         self._policy = policy
+        self._config_store = config_store
+        self._awx = awx
 
     async def _existing(self, session: AsyncSession, ticket: str) -> Change | None:
-        return (await session.execute(select(Change).where(Change.ticket_number == ticket))).scalar_one_or_none()
+        return (
+            await session.execute(select(Change).where(Change.ticket_number == ticket))
+        ).scalar_one_or_none()
 
     async def create_from_intent(
-        self, data: dict[str, Any], *, actor: str, emergency: bool = False, now: datetime | None = None
+        self,
+        data: dict[str, Any],
+        *,
+        actor: str,
+        emergency: bool = False,
+        now: datetime | None = None,
     ) -> tuple[Change, bool]:
         """Parse, persist as received, validate+policy, move to validated/rejected.
 
@@ -93,23 +129,48 @@ class ChangeService:
             if existing is not None:
                 return existing, False
             change = Change(
-                ticket_number=intent.ticket_number, change_type=intent.change_type,
-                state=ChangeState.RECEIVED, requester=intent.requested_by,
-                intent=intent.model_dump(mode="json"), devices=list(intent.devices),
+                ticket_number=intent.ticket_number,
+                change_type=intent.change_type,
+                state=ChangeState.RECEIVED,
+                requester=intent.requested_by,
+                intent=intent.model_dump(mode="json"),
+                devices=list(intent.devices),
             )
             session.add(change)
             await session.flush()
-            result = await validate_intent(intent, self._netbox, self._policy, now=now, emergency=emergency)
+            result = await validate_intent(
+                intent, self._netbox, self._policy, now=now, emergency=emergency
+            )
             if result.ok:
-                await record_transition(session, change, ChangeState.VALIDATED, actor=actor, reason="NetBox + policy passed", evidence=result.evidence)
+                await record_transition(
+                    session,
+                    change,
+                    ChangeState.VALIDATED,
+                    actor=actor,
+                    reason="NetBox + policy passed",
+                    evidence=result.evidence,
+                )
             else:
-                await record_transition(session, change, ChangeState.REJECTED, actor=actor, reason="; ".join(result.errors), evidence=result.evidence)
+                await record_transition(
+                    session,
+                    change,
+                    ChangeState.REJECTED,
+                    actor=actor,
+                    reason="; ".join(result.errors),
+                    evidence=result.evidence,
+                )
             await session.commit()
             await session.refresh(change)
             return change, True
 
-    async def create_from_servicenow(self, ticket: str, *, actor: str, sys_id: str | None = None) -> tuple[Change, bool]:
-        req = await self._snow.get_request_by_sys_id(sys_id) if sys_id else await self._snow.get_request(ticket)
+    async def create_from_servicenow(
+        self, ticket: str, *, actor: str, sys_id: str | None = None
+    ) -> tuple[Change, bool]:
+        req = (
+            await self._snow.get_request_by_sys_id(sys_id)
+            if sys_id
+            else await self._snow.get_request(ticket)
+        )
         try:
             data = intent_from_servicenow_variables(req.ticket, req.variables, req.requested_by)
             return await self.create_from_intent(data, actor=actor)
@@ -119,10 +180,24 @@ class ChangeService:
                 existing = await self._existing(session, req.ticket)
                 if existing is not None:
                     return existing, False
-                change = Change(ticket_number=req.ticket, change_type="unknown", state=ChangeState.RECEIVED, requester=req.requested_by, intent={"variables": req.variables}, devices=[])
+                change = Change(
+                    ticket_number=req.ticket,
+                    change_type="unknown",
+                    state=ChangeState.RECEIVED,
+                    requester=req.requested_by,
+                    intent={"variables": req.variables},
+                    devices=[],
+                )
                 session.add(change)
                 await session.flush()
-                await record_transition(session, change, ChangeState.REJECTED, actor=actor, reason=f"unparseable ServiceNow variables: {exc}", evidence={"variables": req.variables})
+                await record_transition(
+                    session,
+                    change,
+                    ChangeState.REJECTED,
+                    actor=actor,
+                    reason=f"unparseable ServiceNow variables: {exc}",
+                    evidence={"variables": req.variables},
+                )
                 await session.commit()
                 await session.refresh(change)
                 return change, True
@@ -133,6 +208,7 @@ class ChangeService:
             return None
         async with self._sessions() as session:
             return await session.get(Change, pk)
+
     async def list(
         self,
         *,
@@ -168,13 +244,18 @@ class ChangeService:
                 query = query.where(Change.created_at <= date_to)
                 count_query = count_query.where(Change.created_at <= date_to)
             total = int((await session.execute(count_query)).scalar_one())
-            column = {"created_at": Change.created_at, "ticket_number": Change.ticket_number, "change_type": Change.change_type, "state": Change.state}.get(sort_by, Change.created_at)
+            column = {
+                "created_at": Change.created_at,
+                "ticket_number": Change.ticket_number,
+                "change_type": Change.change_type,
+                "state": Change.state,
+            }.get(sort_by, Change.created_at)
             query = query.order_by(column.desc() if sort_dir == "desc" else column.asc())
             query = query.offset((page - 1) * page_size).limit(page_size)
             items = list((await session.execute(query)).scalars().all())
             return items, total
 
-    async def get_detail(self, change_id: str) -> dict | None:
+    async def get_detail(self, change_id: str) -> dict[str, Any] | None:
         pk = _coerce_change_id(change_id)
         if pk is None:
             return None
@@ -182,30 +263,60 @@ class ChangeService:
             change = await session.get(Change, pk)
             if change is None:
                 return None
-            rows = (await session.execute(
-                select(AuditLog).where(AuditLog.change_id == change.id).order_by(AuditLog.created_at)
-            )).scalars().all()
+            rows = (
+                (
+                    await session.execute(
+                        select(AuditLog)
+                        .where(AuditLog.change_id == change.id)
+                        .order_by(AuditLog.created_at)
+                    )
+                )
+                .scalars()
+                .all()
+            )
             transitions = [
-                {"from_state": r.from_state, "to_state": r.to_state, "actor": r.actor, "reason": r.reason, "evidence": r.evidence, "created_at": r.created_at.isoformat() if r.created_at else None}
+                {
+                    "from_state": r.from_state,
+                    "to_state": r.to_state,
+                    "actor": r.actor,
+                    "reason": r.reason,
+                    "evidence": r.evidence,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
                 for r in rows
             ]
-            # Diff: rendered intent lines as additions, grouped by device.
-            diff: list[dict] = []
-            new_no = 0
-            try:
-                intent = parse_intent(change.intent)
-                rendered = render_intent(intent)
-                for device, lines in rendered.items():
-                    diff.append({"old_line": None, "new_line": None, "type": "context", "text": f"# {device}"})
-                    for line in lines:
-                        new_no += 1
-                        diff.append({"old_line": None, "new_line": new_no, "type": "add", "text": line})
-            except Exception:
-                diff = []
+            # Diff: stored running-vs-candidate diffs (F1), grouped by device.
+            # When no config store is wired in, or no backup was collected for
+            # this change, there is no diff to show — never fall back to
+            # rendering the intent as additions.
+            diff: list[dict[str, Any]] = []
+            diff_summary: list[dict[str, Any]] = []
+            if self._config_store is not None:
+                for row in await self._config_store.diffs_for_change(change.id):
+                    diff.append(
+                        {
+                            "old_line": None,
+                            "new_line": None,
+                            "type": "context",
+                            "text": f"# {row.device}  (+{row.added} -{row.removed})",
+                        }
+                    )
+                    diff.extend(list(row.diff_lines or []))
+                    diff_summary.append(
+                        {
+                            "device": row.device,
+                            "added": row.added,
+                            "removed": row.removed,
+                            "is_empty": row.is_empty,
+                            "running_version_id": str(row.running_version_id)
+                            if row.running_version_id
+                            else None,
+                        }
+                    )
             # Checks / Batfish / AWX are read from audit evidence.
-            checks: list[dict] = []
-            batfish: dict = {}
-            awx_jobs: list[dict] = []
+            checks: list[dict[str, Any]] = []
+            batfish: dict[str, Any] = {}
+            awx_jobs: list[dict[str, Any]] = []
             for r in rows:
                 ev = r.evidence or {}
                 if isinstance(ev.get("checks"), list):
@@ -213,15 +324,62 @@ class ChangeService:
                 if isinstance(ev.get("gate"), dict):
                     batfish = ev["gate"]
                 if ev.get("job_id") is not None:
-                    awx_jobs.append({"job_id": ev["job_id"], "status": ev.get("status", ""), "to_state": r.to_state})
+                    awx_jobs.append(
+                        {
+                            "job_id": ev["job_id"],
+                            "status": ev.get("status", ""),
+                            "to_state": r.to_state,
+                        }
+                    )
                 if isinstance(ev.get("dry_run"), dict):
-                    awx_jobs.append({"job_id": ev["dry_run"].get("job_id"), "status": ev["dry_run"].get("status", ""), "to_state": r.to_state})
+                    awx_jobs.append(
+                        {
+                            "job_id": ev["dry_run"].get("job_id"),
+                            "status": ev["dry_run"].get("status", ""),
+                            "to_state": r.to_state,
+                        }
+                    )
             return {
-                "change": change, "transitions": transitions, "intent": change.intent,
-                "diff": diff, "checks": checks, "batfish": batfish, "awx_jobs": awx_jobs,
+                "change": change,
+                "transitions": transitions,
+                "intent": change.intent,
+                "diff": diff,
+                "diff_summary": diff_summary,
+                "checks": checks,
+                "batfish": batfish,
+                "awx_jobs": awx_jobs,
             }
 
-    async def rollback(self, change_id: str, *, actor: str, reason: str = "manual rollback") -> Change | None:
+    async def collect_before_change(
+        self, change_id: str, actor: str
+    ) -> builtins.list[dict[str, Any]]:
+        """Collect the running config for every device on the change and store
+        the real running-vs-candidate diff for each one (F1).
+
+        Raises ValueError when no config store / AWX adapter is wired in, or
+        the change does not exist. `actor` is reserved for the audit trail;
+        collection itself records no state transition.
+        """
+        if self._config_store is None or self._awx is None:
+            raise ValueError(
+                "config store and AWX adapter are required to collect a running config"
+            )
+        change = await self.get(change_id)
+        if change is None:
+            raise ValueError(f"change {change_id} not found")
+        backup = BackupService(self._awx, self._config_store)
+        results: list[dict[str, Any]] = []
+        for device in list(change.devices or []):
+            results.append(
+                await backup.collect_and_diff(
+                    change.id, device, change.ticket_number, dict(change.intent or {})
+                )
+            )
+        return results
+
+    async def rollback(
+        self, change_id: str, *, actor: str, reason: str = "manual rollback"
+    ) -> Change | None:
         """Manual rollback. Legal only from applied / post_checked. Caller (API) checks role."""
         pk = _coerce_change_id(change_id)
         if pk is None:
@@ -233,7 +391,14 @@ class ChangeService:
             state = ChangeState(change.state) if isinstance(change.state, str) else change.state
             if state not in {ChangeState.APPLIED, ChangeState.POST_CHECKED}:
                 raise ValueError(f"rollback is not legal from {state.value}")
-            await record_transition(session, change, ChangeState.ROLLED_BACK, actor=actor, reason=reason, evidence={"manual": True})
+            await record_transition(
+                session,
+                change,
+                ChangeState.ROLLED_BACK,
+                actor=actor,
+                reason=reason,
+                evidence={"manual": True},
+            )
             await session.commit()
             await session.refresh(change)
             return change

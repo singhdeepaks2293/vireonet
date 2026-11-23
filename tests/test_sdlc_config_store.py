@@ -3,6 +3,7 @@
 One repo per device, templates (Jinja only) separate from vars (YAML only),
 NetBox Jinja separate and read-only. Fake GitProvider in-memory; no network.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -36,7 +37,9 @@ def test_device_paths_are_distinct_per_device() -> None:
     assert device_paths("leaf-01")["rendered"] == "rendered/running-config.txt"
     assert device_paths("leaf-01")["vars_snapshot"] == "vars.yaml"
     assert device_paths("leaf-01")["metadata"] == "metadata.yaml"
-    assert set(device_paths("leaf-01")) == set(device_paths("leaf-02"))  # same layout, different repo
+    assert set(device_paths("leaf-01")) == set(
+        device_paths("leaf-02")
+    )  # same layout, different repo
 
 
 def test_template_and_vars_repos_are_different() -> None:
@@ -56,7 +59,9 @@ class _FakeGit:
     async def health_check(self):
         from vireonet.adapters.base import AdapterHealth
 
-        return AdapterHealth(name="fake", status="ok" if self.healthy else "down", capabilities=self.capabilities())
+        return AdapterHealth(
+            name="fake", status="ok" if self.healthy else "down", capabilities=self.capabilities()
+        )
 
     def capabilities(self) -> list[str]:
         return ["get_file"]
@@ -80,9 +85,19 @@ class _FakeGit:
         self.files[path] = content
         return GitCommitResult(sha="sha1", branch=branch, path=path)
 
-    async def open_mr(self, *, source_branch: str, target_branch: str, title: str, description: str = "") -> GitMR:
+    async def open_mr(
+        self, *, source_branch: str, target_branch: str, title: str, description: str = ""
+    ) -> GitMR:
         self.calls.append(("open_mr", source_branch, target_branch, title))
-        return GitMR(id=1, iid=1, title=title, source_branch=source_branch, target_branch=target_branch, url="https://git.example/mr/1", state="opened")
+        return GitMR(
+            id=1,
+            iid=1,
+            title=title,
+            source_branch=source_branch,
+            target_branch=target_branch,
+            url="https://git.example/mr/1",
+            state="opened",
+        )
 
     async def get_mr(self, mr_id: int) -> GitMR:
         raise NotImplementedError
@@ -114,7 +129,10 @@ async def test_template_store_rejects_secret_in_template() -> None:
 
 async def test_template_store_returns_clean_template() -> None:
     git = _FakeGit({"templates/ios-xe/vlan.j2": "vlan {{ vlan_id }}\n name {{ vlan_name }}"})
-    assert await TemplateStore(git).get_template("ios-xe/vlan.j2") == "vlan {{ vlan_id }}\n name {{ vlan_name }}"
+    assert (
+        await TemplateStore(git).get_template("ios-xe/vlan.j2")
+        == "vlan {{ vlan_id }}\n name {{ vlan_name }}"
+    )
 
 
 @pytest.mark.parametrize("bad", ["../etc/passwd", "/absolute/path.j2"])
@@ -130,11 +148,13 @@ async def test_template_store_lists_from_manifest() -> None:
 
 
 async def test_vars_store_merges_site_role_device_type() -> None:
-    git = _FakeGit({
-        "site/dc1.yaml": "ntp: 10.0.0.1\ndomain: dc1.example\n",
-        "role/leaf.yaml": "domain: leaf.example\nmtu: 9000\n",
-        "device-type/C9300.yaml": "mtu: 9216\n",
-    })
+    git = _FakeGit(
+        {
+            "site/dc1.yaml": "ntp: 10.0.0.1\ndomain: dc1.example\n",
+            "role/leaf.yaml": "domain: leaf.example\nmtu: 9000\n",
+            "device-type/C9300.yaml": "mtu: 9216\n",
+        }
+    )
     merged = await VarsStore(git).get_vars(site="dc1", role="leaf", device_type="C9300")
     assert merged["ntp"] == "10.0.0.1"
     assert merged["domain"] == "leaf.example"  # role overrides site
@@ -162,8 +182,12 @@ async def test_device_repo_manager_commits_rendered_to_that_device_only() -> Non
 
     manager = DeviceRepoManager(factory)
     url = await manager.commit_rendered(
-        hostname="leaf-01", ticket_number="RITM0001234", rendered="vlan 100",
-        vars_snapshot="vlan_id: 100", template_version="v1", metadata="template: v1",
+        hostname="leaf-01",
+        ticket_number="RITM0001234",
+        rendered="vlan 100",
+        vars_snapshot="vlan_id: 100",
+        template_version="v1",
+        metadata="template: v1",
     )
     assert url == "https://git.example/mr/1"
     git = created["netops/config-leaf-01"]
@@ -182,8 +206,12 @@ async def test_device_repo_manager_requires_existing_repo() -> None:
 
     with pytest.raises(ValueError, match="does not exist"):
         await DeviceRepoManager(factory).commit_rendered(
-            hostname="leaf-01", ticket_number="RITM0001234", rendered="x",
-            vars_snapshot="x", template_version="v1", metadata="x",
+            hostname="leaf-01",
+            ticket_number="RITM0001234",
+            rendered="x",
+            vars_snapshot="x",
+            template_version="v1",
+            metadata="x",
         )
 
 
@@ -202,7 +230,9 @@ async def test_device_repo_backup_commits_to_backup_path() -> None:
         created[repo] = git
         return git
 
-    sha = await DeviceRepoManager(factory).commit_backup(hostname="leaf-01", ticket_number="RITM0001234", running="hostname leaf-01")
+    sha = await DeviceRepoManager(factory).commit_backup(
+        hostname="leaf-01", ticket_number="RITM0001234", running="hostname leaf-01"
+    )
     assert sha == "sha1"
     git = created["netops/config-leaf-01"]
     assert any(c[0] == "commit_file" and c[2] == "backups/running-config.txt" for c in git.calls)
@@ -230,7 +260,9 @@ async def test_netbox_export_is_read_only_audit_copy() -> None:
         created[repo] = git
         return git
 
-    url = await NetBoxJinjaExport(_FakeNetBox("{% for v in vlans %}vlan {{ v }}{% endfor %}"), factory).export_device_template("leaf-01", ticket_number="RITM0001234")
+    url = await NetBoxJinjaExport(
+        _FakeNetBox("{% for v in vlans %}vlan {{ v }}{% endfor %}"), factory
+    ).export_device_template("leaf-01", ticket_number="RITM0001234")
     assert url == "https://git.example/mr/1"
     # Export goes to netbox-export repo only, never to the device config repo.
     assert "netops/netbox-export" in created
@@ -247,7 +279,9 @@ async def test_netbox_export_empty_jinja_does_nothing() -> None:
         created[repo] = git
         return git
 
-    result = await NetBoxJinjaExport(_FakeNetBox(""), factory).export_device_template("leaf-01", ticket_number="RITM0001234")
+    result = await NetBoxJinjaExport(_FakeNetBox(""), factory).export_device_template(
+        "leaf-01", ticket_number="RITM0001234"
+    )
     assert result == ""
     assert created == {}
 

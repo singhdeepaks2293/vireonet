@@ -9,8 +9,14 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, ge
 ticket_var: contextvars.ContextVar[str] = contextvars.ContextVar("vireonet_ticket", default="")
 
 CHANGES_TOTAL = Counter("vireonet_changes_total", "Changes by final state", ["state"])
-WORKFLOW_DURATION = Histogram("vireonet_workflow_duration_seconds", "Workflow duration", ["workflow"])
-ADAPTER_CALLS = Counter("vireonet_adapter_calls_total", "Adapter calls by adapter/operation/status", ["adapter", "operation", "status"])
+WORKFLOW_DURATION = Histogram(
+    "vireonet_workflow_duration_seconds", "Workflow duration", ["workflow"]
+)
+ADAPTER_CALLS = Counter(
+    "vireonet_adapter_calls_total",
+    "Adapter calls by adapter/operation/status",
+    ["adapter", "operation", "status"],
+)
 CHECK_FAILURES = Counter("vireonet_check_failures_total", "Check failures by check name", ["check"])
 LOCKS_HELD = Gauge("vireonet_device_locks_held", "Device locks currently held")
 ZTP_TOTAL = Counter("vireonet_ztp_total", "ZTP devices by stage", ["stage"])

@@ -1,4 +1,5 @@
 """IAM users table."""
+
 import sqlalchemy as sa
 
 from alembic import op
@@ -7,6 +8,7 @@ revision = "0004"
 down_revision = "0003"
 branch_labels = None
 depends_on = None
+
 
 def upgrade() -> None:
     op.create_table(
@@ -23,6 +25,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_users_username", "users", ["username"])
     op.create_index("ix_users_role", "users", ["role"])
+
 
 def downgrade() -> None:
     op.drop_index("ix_users_role", table_name="users")

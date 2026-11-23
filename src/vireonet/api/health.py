@@ -36,19 +36,39 @@ async def system_health(request: Request) -> SystemHealthResponse:
     # Temporal: namespace describe if a client is configured.
     temporal = getattr(request.app.state, "temporal_client", None)
     if temporal is None:
-        components.append(ComponentHealth(name="temporal", status="not_configured", detail="temporal client not configured"))
+        components.append(
+            ComponentHealth(
+                name="temporal", status="not_configured", detail="temporal client not configured"
+            )
+        )
     else:
         try:
             # RealTemporalClient exposes the underlying client; FakeTemporalClient
             # reports ok without a network call. Both have a health_check() in M3.
             if hasattr(temporal, "health_check"):
                 ok = await temporal.health_check()
-                components.append(ComponentHealth(name="temporal", status="ok" if ok else "down", detail="namespace reachable" if ok else "namespace describe failed"))
+                components.append(
+                    ComponentHealth(
+                        name="temporal",
+                        status="ok" if ok else "down",
+                        detail="namespace reachable" if ok else "namespace describe failed",
+                    )
+                )
             else:
-                components.append(ComponentHealth(name="temporal", status="ok", detail="client configured"))
+                components.append(
+                    ComponentHealth(name="temporal", status="ok", detail="client configured")
+                )
         except Exception as exc:
-            components.append(ComponentHealth(name="temporal", status="down", detail=f"health check failed: {exc}"))
+            components.append(
+                ComponentHealth(
+                    name="temporal", status="down", detail=f"health check failed: {exc}"
+                )
+            )
     overall = "ok"
     if any(c.status == "down" for c in components):
-        overall = "down" if any(c.name in {"api", "database"} for c in components if c.status == "down") else "degraded"
+        overall = (
+            "down"
+            if any(c.name in {"api", "database"} for c in components if c.status == "down")
+            else "degraded"
+        )
     return SystemHealthResponse(status=overall, components=components)

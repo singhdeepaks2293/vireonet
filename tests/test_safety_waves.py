@@ -11,7 +11,9 @@ async def test_waves_run_sequentially_and_complete() -> None:
         return []
 
     r = await run_waves(["a", "b", "c"], ok, wave_size=2, abort_threshold=1)
-    assert seen == [["a", "b"], ["c"]] and not r.aborted and r.completed_waves == [["a", "b"], ["c"]]
+    assert (
+        seen == [["a", "b"], ["c"]] and not r.aborted and r.completed_waves == [["a", "b"], ["c"]]
+    )
 
 
 async def test_abort_threshold_stops_remaining_waves() -> None:

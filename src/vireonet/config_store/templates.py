@@ -9,6 +9,7 @@ from vireonet.config_store.layout import FORBIDDEN_IN_TEMPLATES
 class TemplateStore:
     """Jinja templates only, from netops/templates. Render source for VireoNet.
     NetBox Jinja is NOT read from here — see netbox_export.py."""
+
     def __init__(self, git: GitProvider):
         self._git = git
 
@@ -23,10 +24,16 @@ class TemplateStore:
     def _validate(self, content: str) -> None:
         for pattern in FORBIDDEN_IN_TEMPLATES:
             if re.search(pattern, content, re.IGNORECASE):
-                raise ValueError(f"template violates separation rule: matches {pattern!r} (no IPs/secrets/device values in templates)")
+                raise ValueError(
+                    f"template violates separation rule: matches {pattern!r} (no IPs/secrets/device values in templates)"
+                )
 
     async def list_templates(self, ref: str = "main") -> list[str]:
         # The GitProvider protocol has no list API; templates are listed from a
         # manifest file in the repo root, not by directory walk.
         manifest = (await self._git.get_file("manifest.yaml", ref)).content
-        return [line.strip("- ").strip() for line in manifest.splitlines() if line.strip().startswith("- ")]
+        return [
+            line.strip("- ").strip()
+            for line in manifest.splitlines()
+            if line.strip().startswith("- ")
+        ]

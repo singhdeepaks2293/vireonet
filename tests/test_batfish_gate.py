@@ -9,7 +9,9 @@ BASE = {"devices": ["leaf-01"], "site": "dc1", "ticket_number": "RITM1", "reques
 
 async def test_gate_passes_clean_candidate() -> None:
     intent = parse_intent({**BASE, "change_type": "vlan_add", "vlan_id": 200, "vlan_name": "new"})
-    report = await run_batfish_gate(intent, {"leaf-01.cfg": "hostname leaf-01\n"}, FakeBatfishAdapter())
+    report = await run_batfish_gate(
+        intent, {"leaf-01.cfg": "hostname leaf-01\n"}, FakeBatfishAdapter()
+    )
     assert report["passed"] is True
     assert report["files"] == ["leaf-01.cfg"]
 

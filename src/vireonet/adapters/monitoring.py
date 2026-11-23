@@ -25,7 +25,12 @@ class MonitoringAdapter(BaseAdapter):
     """
 
     def __init__(
-        self, config: AdapterConfig, *, backend: str = "none", base_url: str = "", token: str = "",
+        self,
+        config: AdapterConfig,
+        *,
+        backend: str = "none",
+        base_url: str = "",
+        token: str = "",
         correlation_id: str | None = None,
     ) -> None:
         super().__init__(config, correlation_id=correlation_id)
@@ -38,21 +43,36 @@ class MonitoringAdapter(BaseAdapter):
 
     async def health_check(self) -> AdapterHealth:
         if self.backend == "none":
-            return AdapterHealth(name=self.name, status="ok", capabilities=[], detail="monitoring disabled (backend=none)")
+            return AdapterHealth(
+                name=self.name,
+                status="ok",
+                capabilities=[],
+                detail="monitoring disabled (backend=none)",
+            )
         try:
-            await self._request("GET", "/api/v2/status" if self.backend == "alertmanager" else "/api/v0/system", idempotent=True)
+            await self._request(
+                "GET",
+                "/api/v2/status" if self.backend == "alertmanager" else "/api/v0/system",
+                idempotent=True,
+            )
             return AdapterHealth(name=self.name, status="ok", capabilities=self.capabilities())
         except Exception as exc:  # noqa: BLE001
-            return AdapterHealth(name=self.name, status="down", detail=str(exc), capabilities=self.capabilities())
+            return AdapterHealth(
+                name=self.name, status="down", detail=str(exc), capabilities=self.capabilities()
+            )
 
-    async def _request(self, method: str, path: str, *, json_body: dict[str, Any] | None = None, idempotent: bool) -> Any:
+    async def _request(
+        self, method: str, path: str, *, json_body: dict[str, Any] | None = None, idempotent: bool
+    ) -> Any:
         async def do() -> Any:
             headers: dict[str, str] = {}
             if self.token:
                 headers["X-Auth-Token"] = self.token
             if self.correlation_id:
                 headers["X-Correlation-ID"] = self.correlation_id
-            async with create_http_client(self.config, correlation_id=self.correlation_id) as client:
+            async with create_http_client(
+                self.config, correlation_id=self.correlation_id
+            ) as client:
                 try:
                     resp = await client.request(method, path, json=json_body, headers=headers)
                 except httpx.TimeoutException as exc:
@@ -64,7 +84,9 @@ class MonitoringAdapter(BaseAdapter):
                 if resp.status_code == 404:
                     raise AdapterNotFound(self.name, method, path)
                 if resp.status_code >= 400:
-                    raise AdapterUnavailable(self.name, method, f"status {resp.status_code}: {resp.text[:500]}")
+                    raise AdapterUnavailable(
+                        self.name, method, f"status {resp.status_code}: {resp.text[:500]}"
+                    )
                 return resp.json() if resp.content else {}
 
         return await self.execute_with_retry(method, do, idempotent=idempotent)
@@ -76,8 +98,10 @@ class MonitoringAdapter(BaseAdapter):
             now = datetime.now(UTC)
             body = {
                 "matchers": [{"name": "instance", "value": device, "isRegex": False}],
-                "startsAt": now.isoformat(), "endsAt": (now + timedelta(minutes=duration_minutes)).isoformat(),
-                "createdBy": "vireonet", "comment": f"Change window for {device}",
+                "startsAt": now.isoformat(),
+                "endsAt": (now + timedelta(minutes=duration_minutes)).isoformat(),
+                "createdBy": "vireonet",
+                "comment": f"Change window for {device}",
             }
             data = await self._request("POST", "/api/v2/silences", json_body=body, idempotent=False)
             return str(data.get("silenceID", data.get("id", "")))
@@ -85,7 +109,9 @@ class MonitoringAdapter(BaseAdapter):
             # LibreNMS maintenance / alert suppression is version-specific.
             # This uses the documented device-update endpoint; verify the field
             # name on your LibreNMS version before relying on it.
-            await self._request("PATCH", f"/api/v0/devices/{device}", json_body={"disabled": 1}, idempotent=True)
+            await self._request(
+                "PATCH", f"/api/v0/devices/{device}", json_body={"disabled": 1}, idempotent=True
+            )
             return f"librenms-disabled-{device}"
         raise AdapterValidationError(self.name, "silence", f"unknown backend {self.backend}")
 
@@ -99,7 +125,9 @@ class MonitoringAdapter(BaseAdapter):
         if self.backend == "none":
             return True
         if self.backend == "librenms":
-            await self._request("PATCH", f"/api/v0/devices/{device}", json_body={"disabled": 0}, idempotent=True)
+            await self._request(
+                "PATCH", f"/api/v0/devices/{device}", json_body={"disabled": 0}, idempotent=True
+            )
             return True
         # Alertmanager: monitoring is enabled by Prometheus discovery; there is
         # nothing to enable per device. Unsilencing (in close/rollback) is the action.
@@ -109,6 +137,8 @@ class MonitoringAdapter(BaseAdapter):
         if self.backend == "none":
             return True
         if self.backend == "librenms":
-            await self._request("PATCH", f"/api/v0/devices/{device}", json_body={"disabled": 1}, idempotent=True)
+            await self._request(
+                "PATCH", f"/api/v0/devices/{device}", json_body={"disabled": 1}, idempotent=True
+            )
             return True
         return True

@@ -17,12 +17,18 @@ def _adapter() -> AwxAdapter:
 
 @respx.mock
 async def test_awx_launch_and_poll() -> None:
-    respx.get(url__regex=r".*/api/v2/job_templates/\?name=backup.*").mock(return_value=Response(200, json={"results": [{"id": 10}], "next": None}))
-    respx.post(url__regex=r".*/api/v2/job_templates/10/launch/.*").mock(return_value=Response(201, json={"job": 42}))
-    respx.get(url__regex=r".*/api/v2/jobs/42/.*").mock(side_effect=[
-        Response(200, json={"id": 42, "name": "backup", "status": "running"}),
-        Response(200, json={"id": 42, "name": "backup", "status": "successful"}),
-    ])
+    respx.get(url__regex=r".*/api/v2/job_templates/\?name=backup.*").mock(
+        return_value=Response(200, json={"results": [{"id": 10}], "next": None})
+    )
+    respx.post(url__regex=r".*/api/v2/job_templates/10/launch/.*").mock(
+        return_value=Response(201, json={"job": 42})
+    )
+    respx.get(url__regex=r".*/api/v2/jobs/42/.*").mock(
+        side_effect=[
+            Response(200, json={"id": 42, "name": "backup", "status": "running"}),
+            Response(200, json={"id": 42, "name": "backup", "status": "successful"}),
+        ]
+    )
     a = _adapter()
     job = await a.launch_job("backup", {"ticket": "RITM1"})
     assert job.id == 42
@@ -39,12 +45,18 @@ async def test_awx_secret_extra_vars_rejected_before_http() -> None:
 
 @respx.mock
 async def test_awx_template_not_found() -> None:
-    respx.get(url__regex=r".*/api/v2/job_templates/.*").mock(return_value=Response(200, json={"results": [], "next": None}))
+    respx.get(url__regex=r".*/api/v2/job_templates/.*").mock(
+        return_value=Response(200, json={"results": [], "next": None})
+    )
     with pytest.raises(AdapterNotFound):
         await _adapter().launch_job("nope", {})
 
 
 @respx.mock
 async def test_awx_contract_against_fake_template_list() -> None:
-    respx.get(url__regex=r".*/api/v2/job_templates/.*").mock(return_value=Response(200, json={"results": [{"name": "backup"}, {"name": "apply"}], "next": None}))
+    respx.get(url__regex=r".*/api/v2/job_templates/.*").mock(
+        return_value=Response(
+            200, json={"results": [{"name": "backup"}, {"name": "apply"}], "next": None}
+        )
+    )
     assert await _adapter().list_templates() == ["backup", "apply"]

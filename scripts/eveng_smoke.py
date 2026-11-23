@@ -19,7 +19,8 @@ async def _run(topology: str, lab_name: str) -> int:
     settings = get_settings()
     adapter = EveNgAdapter(
         AdapterConfig(name="eveng", base_url=settings.eveng_base_url),
-        username=settings.eveng_username, password=settings.eveng_password,
+        username=settings.eveng_username,
+        password=settings.eveng_password,
     )
     lab = await adapter.start_lab(lab_name, topology)
     try:

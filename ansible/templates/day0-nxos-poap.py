@@ -4,6 +4,7 @@ Downloads the day-0 config for this serial from VireoNet and applies it.
 No credentials in this script; the device authenticates with its one-time
 token to the callback endpoint after boot, not to POAP.
 """
+
 import urllib.request
 
 SERIAL = "{{ serial }}"

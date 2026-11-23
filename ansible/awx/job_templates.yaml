@@ -41,3 +41,8 @@ job_templates:
     inventory: NetBox
     project: VireoNet
     playbook: ansible/playbooks/ztp_day1.yml
+  - name: dhcp-reload
+    job_type: run
+    inventory: NetBox
+    project: VireoNet
+    playbook: ansible/playbooks/dhcp_reload.yml

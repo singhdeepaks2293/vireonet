@@ -4,6 +4,7 @@ User creation, duplicate/short-password/unknown-role rejection, login,
 inactive users, last-admin guards, role changes, JWT round-trip and
 expiry. DB is in-memory SQLite; no network.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -27,7 +28,9 @@ def _svc(engine) -> UserService:
 
 
 async def _admin(svc: UserService, username: str = "admin1"):
-    return await svc.create(username=username, display_name=username, password="correct-horse-battery", role="admin")
+    return await svc.create(
+        username=username, display_name=username, password="correct-horse-battery", role="admin"
+    )
 
 
 def test_password_hash_and_verify() -> None:
@@ -48,12 +51,19 @@ def test_role_permissions_matrix() -> None:
     assert can("admin", "viewer") and can("approver", "operator") and not can("viewer", "operator")
     assert set(ALL_PERMISSIONS) == {p for perms in ROLE_PERMISSIONS.values() for p in perms}
     # Permissions only grow with rank.
-    assert set(ROLE_PERMISSIONS["viewer"]) <= set(ROLE_PERMISSIONS["operator"]) <= set(ROLE_PERMISSIONS["approver"]) <= set(ROLE_PERMISSIONS["admin"])
+    assert (
+        set(ROLE_PERMISSIONS["viewer"])
+        <= set(ROLE_PERMISSIONS["operator"])
+        <= set(ROLE_PERMISSIONS["approver"])
+        <= set(ROLE_PERMISSIONS["admin"])
+    )
 
 
 async def test_create_user_and_authenticate(engine) -> None:
     svc = _svc(engine)
-    user = await svc.create(username="alice", display_name="Alice", password="correct-horse-battery", role="viewer")
+    user = await svc.create(
+        username="alice", display_name="Alice", password="correct-horse-battery", role="viewer"
+    )
     assert user.role == "viewer" and user.is_active is True
     assert await svc.authenticate("alice", "correct-horse-battery") is not None
     assert await svc.authenticate("alice", "wrong-password") is None
@@ -62,9 +72,16 @@ async def test_create_user_and_authenticate(engine) -> None:
 
 async def test_duplicate_username_rejected(engine) -> None:
     svc = _svc(engine)
-    await svc.create(username="alice", display_name="Alice", password="correct-horse-battery", role="viewer")
+    await svc.create(
+        username="alice", display_name="Alice", password="correct-horse-battery", role="viewer"
+    )
     with pytest.raises(ValueError, match="already exists"):
-        await svc.create(username="alice", display_name="Alice 2", password="correct-horse-battery", role="viewer")
+        await svc.create(
+            username="alice",
+            display_name="Alice 2",
+            password="correct-horse-battery",
+            role="viewer",
+        )
 
 
 @pytest.mark.parametrize("bad", ["short", "12345678901", ""])
@@ -77,13 +94,17 @@ async def test_short_password_rejected(engine, bad: str) -> None:
 async def test_unknown_role_rejected(engine) -> None:
     svc = _svc(engine)
     with pytest.raises(ValueError, match="unknown role"):
-        await svc.create(username="bob", display_name="Bob", password="correct-horse-battery", role="superuser")
+        await svc.create(
+            username="bob", display_name="Bob", password="correct-horse-battery", role="superuser"
+        )
 
 
 async def test_inactive_user_cannot_authenticate(engine) -> None:
     svc = _svc(engine)
     admin = await _admin(svc, "admin1")
-    user = await svc.create(username="alice", display_name="Alice", password="correct-horse-battery", role="viewer")
+    user = await svc.create(
+        username="alice", display_name="Alice", password="correct-horse-battery", role="viewer"
+    )
     await svc.set_active(user.id, False, actor_id=admin.id)
     assert await svc.authenticate("alice", "correct-horse-battery") is None
 
@@ -119,7 +140,9 @@ async def test_admin_cannot_demote_or_deactivate_self_when_not_last(engine) -> N
 async def test_role_change_takes_effect(engine) -> None:
     svc = _svc(engine)
     admin = await _admin(svc, "admin1")
-    user = await svc.create(username="alice", display_name="Alice", password="correct-horse-battery", role="viewer")
+    user = await svc.create(
+        username="alice", display_name="Alice", password="correct-horse-battery", role="viewer"
+    )
     updated = await svc.set_role(user.id, "operator", actor_id=admin.id)
     assert updated is not None and updated.role == "operator"
     assert await svc.set_role("no-such-id", "viewer", actor_id=admin.id) is None
@@ -128,8 +151,12 @@ async def test_role_change_takes_effect(engine) -> None:
 
 async def test_user_list_is_sorted(engine) -> None:
     svc = _svc(engine)
-    await svc.create(username="zoe", display_name="Zoe", password="correct-horse-battery", role="viewer")
-    await svc.create(username="amy", display_name="Amy", password="correct-horse-battery", role="viewer")
+    await svc.create(
+        username="zoe", display_name="Zoe", password="correct-horse-battery", role="viewer"
+    )
+    await svc.create(
+        username="amy", display_name="Amy", password="correct-horse-battery", role="viewer"
+    )
     assert [u.username for u in await svc.list()] == ["amy", "zoe"]
 
 
@@ -152,6 +179,8 @@ def test_jwt_wrong_secret_rejected() -> None:
 def test_jwt_expired_rejected() -> None:
     from jwt import ExpiredSignatureError
 
-    token = create_access_token(user_id="u1", username="alice", role="viewer", secret=SECRET, expires_minutes=-1)
+    token = create_access_token(
+        user_id="u1", username="alice", role="viewer", secret=SECRET, expires_minutes=-1
+    )
     with pytest.raises(ExpiredSignatureError):
         decode_access_token(token, secret=SECRET)

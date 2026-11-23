@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- VireoNet F5 lab topology: two IOSvL2 leaf switches linked by one bridge
+     network. Node names leaf-01 / leaf-02 must match the NetBox devices used
+     by the lab test (scripts/lab_e2e.py, Flow A); Gi0/0 is the inter-leaf
+     link, Gi0/1 is the access port for VLAN 100 in the lab intent.
+
+     UNCERTAIN: EVE-NG has no stable single REST call to import a .unl file
+     (see src/vireonet/adapters/eveng.py: load_topology — do NOT invent one),
+     so importing this file may need the EVE-NG UI (Lab -> Import) on the
+     EVE-NG host. The `image` attribute must match the IOSvL2 image installed
+     on that host — image names differ between EVE-NG installs, so adjust it
+     before importing. -->
+<lab version="1" name="two-leaf" description="VireoNet F5 lab: leaf-01 &lt;-&gt; leaf-02" author="VireoNet">
+  <topology>
+    <nodes>
+      <node id="1" name="leaf-01" type="qemu" template="viosl2" image="vios_l2-adventerprisek9-m.qcow2" cpu="1" ram="512" ethernet="2" console="telnet" icon="Switch.png">
+        <interface id="0" name="Gi0/0" type="ethernet" network_id="1"/>
+      </node>
+      <node id="2" name="leaf-02" type="qemu" template="viosl2" image="vios_l2-adventerprisek9-m.qcow2" cpu="1" ram="512" ethernet="2" console="telnet" icon="Switch.png">
+        <interface id="0" name="Gi0/0" type="ethernet" network_id="1"/>
+      </node>
+    </nodes>
+    <networks>
+      <network id="1" name="leaf-01 &lt;-&gt; leaf-02" type="bridge"/>
+    </networks>
+  </topology>
+</lab>

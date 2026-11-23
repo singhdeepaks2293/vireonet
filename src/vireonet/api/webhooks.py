@@ -1,35 +1,51 @@
 from __future__ import annotations
 
+import hmac
+
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from vireonet.api.security import verify_webhook
-
-from vireonet.services.changes import ChangeService
+from vireonet.structlog_config import get_logger
 
 router = APIRouter()
 
 
-def _verify_gitlab_token(request: Request) -> None:
-    expected = request.app.state.settings.gitlab_webhook_token
+def _verify_provider_token(request: Request, header: str) -> None:
+    """Plain shared-token check for a Git provider webhook.
+
+    The expected token is settings.gitlab_webhook_token (the single
+    configured Git webhook token). No token configured is fail-closed:
+    only an explicit dev flag allows the call through (with a warning).
+    """
+    settings = request.app.state.settings
+    expected = settings.gitlab_webhook_token
     if not expected:
-        return  # dev only; set the token in production
-    if request.headers.get("X-Gitlab-Token", "") != expected:
+        if settings.dev:
+            get_logger(__name__).warning("git webhook called with no token configured (dev mode)")
+            return
+        raise HTTPException(
+            status_code=401, detail="webhook authentication required: no secret configured"
+        )
+    if not hmac.compare_digest(request.headers.get(header, ""), expected):
         raise HTTPException(status_code=401, detail="bad GitLab webhook token")
 
 
 @router.post("/webhooks/gitlab")
 async def gitlab_webhook(request: Request) -> dict[str, str]:
-    _verify_gitlab_token(request)
+    _verify_provider_token(request, "X-Gitlab-Token")
     payload = await request.json()
     kind = str(payload.get("object_kind", ""))
-    service: ChangeService = request.app.state.change_service
     temporal = request.app.state.temporal_client
     # Pipeline event: signal CI pass/fail to the workflow (Workflow ID = ticket).
     # The ticket is carried in the MR title / pipeline variables as `ticket`.
     # If the payload has no ticket, we cannot route it — return 202 and log it.
     if kind == "pipeline":
         status = str(payload.get("object_attributes", {}).get("status", ""))
-        ticket = str(payload.get("object_attributes", {}).get("variables", [{}])[0].get("value", "") if payload.get("object_attributes", {}).get("variables") else "")
+        ticket = str(
+            payload.get("object_attributes", {}).get("variables", [{}])[0].get("value", "")
+            if payload.get("object_attributes", {}).get("variables")
+            else ""
+        )
         # Fallback: ticket from the MR title is resolved by the caller in M5
         # via the `ticket` variable on the pipeline; if absent, do nothing.
         if not ticket:
@@ -58,7 +74,6 @@ def _ticket_from_title(title: str) -> str | None:
     return m.group(1) if m else None
 
 
-
 @router.post("/webhooks/github")
 async def github_webhook(
     request: Request,
@@ -74,7 +89,11 @@ async def github_webhook(
         ticket = _ticket_from_title(str(pr.get("title", "")))
         if ticket and temporal is not None:
             await temporal.signal_ci(ticket, passed, "github check run")
-    elif x_github_event == "pull_request" and payload.get("action") == "closed" and payload.get("pull_request", {}).get("merged"):
+    elif (
+        x_github_event == "pull_request"
+        and payload.get("action") == "closed"
+        and payload.get("pull_request", {}).get("merged")
+    ):
         ticket = _ticket_from_title(str(payload["pull_request"].get("title", "")))
         if ticket and temporal is not None:
             await temporal.signal_merge(ticket)
@@ -121,7 +140,11 @@ async def gitea_webhook(
         ticket = _ticket_from_title(str(payload.get("workflow_run", {}).get("head_branch", "")))
         if ticket and temporal is not None:
             await temporal.signal_ci(ticket, passed, "gitea workflow run")
-    elif x_gitea_event == "pull_request" and payload.get("action") == "closed" and payload.get("pull_request", {}).get("merged"):
+    elif (
+        x_gitea_event == "pull_request"
+        and payload.get("action") == "closed"
+        and payload.get("pull_request", {}).get("merged")
+    ):
         ticket = _ticket_from_title(str(payload["pull_request"].get("title", "")))
         if ticket and temporal is not None:
             await temporal.signal_merge(ticket)

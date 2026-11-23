@@ -3,6 +3,7 @@
 Split out of state_machine.py so models.py can use ChangeState without a
 circular import (state_machine imports the models for record_transition).
 """
+
 from __future__ import annotations
 
 from enum import StrEnum
@@ -24,4 +25,3 @@ class ChangeState(StrEnum):
     PRE_CHECK_FAILED = "pre_check_failed"
     ROLLED_BACK = "rolled_back"
     FAILED = "failed"
-

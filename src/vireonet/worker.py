@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from vireonet.adapters.protocols import (
+    AwxProtocol,
+    BatfishProtocol,
+    DhcpProtocol,
+    NetBoxProtocol,
+    NotificationProtocol,
+    ServiceNowProtocol,
+)
 from vireonet.adapters.registry import build_adapters
 from vireonet.config import get_settings
 from vireonet.db import create_engine, create_session_factory
@@ -25,23 +34,40 @@ async def main() -> None:
     sessions = create_session_factory(engine)
     policy = PolicyEngine.from_yaml(settings.policy_file)
     change_activities = ChangeActivities(
-        sessions, servicenow=adapters["servicenow"], netbox=adapters["netbox"],  # type: ignore[arg-type]
-        awx=adapters["awx"], policy=policy,  # type: ignore[arg-type]
-        lock_ttl_seconds=settings.lock_ttl_seconds, wave_size=settings.wave_size,
+        sessions,
+        servicenow=cast(ServiceNowProtocol, adapters["servicenow"]),
+        netbox=cast(NetBoxProtocol, adapters["netbox"]),
+        awx=cast(AwxProtocol, adapters["awx"]),
+        policy=policy,
+        lock_ttl_seconds=settings.lock_ttl_seconds,
+        wave_size=settings.wave_size,
         abort_threshold=settings.abort_threshold,
-        notification=adapters.get("notification"), monitoring=adapters.get("monitoring"),  # type: ignore[arg-type]
+        notification=cast(NotificationProtocol | None, adapters.get("notification")),
+        monitoring=adapters.get("monitoring"),  # type: ignore[arg-type]
         monitoring_silence_minutes=settings.monitoring_silence_minutes,
     )
-    ztp_service = ZtpService(sessions, netbox=adapters["netbox"], token_ttl_seconds=settings.ztp_token_ttl_seconds)  # type: ignore[arg-type]
+    ztp_service = ZtpService(
+        sessions,
+        netbox=cast(NetBoxProtocol, adapters["netbox"]),
+        token_ttl_seconds=settings.ztp_token_ttl_seconds,
+    )
     ztp_activities = ZtpActivities(
-        sessions, netbox=adapters["netbox"], dhcp=adapters["dhcp"], awx=adapters["awx"],  # type: ignore[arg-type]
-        batfish=adapters["batfish"], servicenow=adapters["servicenow"], ztp_service=ztp_service,  # type: ignore[arg-type]
-        tftp_server=settings.dhcp_tftp_server, http_base_url=settings.dhcp_http_base_url,
+        sessions,
+        netbox=cast(NetBoxProtocol, adapters["netbox"]),
+        dhcp=cast(DhcpProtocol, adapters["dhcp"]),
+        awx=adapters["awx"],  # type: ignore[arg-type]
+        batfish=cast(BatfishProtocol, adapters["batfish"]),
+        servicenow=cast(ServiceNowProtocol, adapters["servicenow"]),
+        ztp_service=ztp_service,
+        tftp_server=settings.dhcp_tftp_server,
+        http_base_url=settings.dhcp_http_base_url,
         pnp_server_url=settings.dhcp_pnp_server_url,
+        policy=policy,
     )
     client = await Client.connect(settings.temporal_address, namespace=settings.temporal_namespace)
     worker = Worker(
-        client, task_queue=settings.temporal_task_queue,
+        client,
+        task_queue=settings.temporal_task_queue,
         workflows=[ChangeWorkflow, ZtpWorkflow],
         activities=all_activities(change_activities) + all_ztp_activities(ztp_activities),
     )

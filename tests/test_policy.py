@@ -21,13 +21,29 @@ def test_default_policy_from_yaml() -> None:
 
 def test_max_blast_radius_denied() -> None:
     p = PolicyEngine.from_yaml("policies/default.yaml")
-    intent = parse_intent({**BASE, "devices": [f"leaf-{i:02d}" for i in range(11)], "change_type": "vlan_add", "vlan_id": 100, "vlan_name": "web"})
+    intent = parse_intent(
+        {
+            **BASE,
+            "devices": [f"leaf-{i:02d}" for i in range(11)],
+            "change_type": "vlan_add",
+            "vlan_id": 100,
+            "vlan_name": "web",
+        }
+    )
     assert "blast radius" in p.evaluate(intent, now=INSIDE).denials[0]
 
 
 def test_protected_device_denied() -> None:
     p = PolicyEngine.from_yaml("policies/default.yaml")
-    intent = parse_intent({**BASE, "devices": ["core-01"], "change_type": "vlan_add", "vlan_id": 100, "vlan_name": "web"})
+    intent = parse_intent(
+        {
+            **BASE,
+            "devices": ["core-01"],
+            "change_type": "vlan_add",
+            "vlan_id": 100,
+            "vlan_name": "web",
+        }
+    )
     r = p.evaluate(intent, now=INSIDE)
     assert not r.allowed and any("core-01" in d for d in r.denials)
 
@@ -38,7 +54,15 @@ def test_change_window_denied_and_emergency_bypasses_only_window() -> None:
     assert not p.evaluate(intent, now=OUTSIDE).allowed
     assert p.evaluate(intent, now=OUTSIDE, emergency=True).allowed
     # Emergency does NOT bypass protected-device denial.
-    bad = parse_intent({**BASE, "devices": ["core-01"], "change_type": "vlan_add", "vlan_id": 100, "vlan_name": "web"})
+    bad = parse_intent(
+        {
+            **BASE,
+            "devices": ["core-01"],
+            "change_type": "vlan_add",
+            "vlan_id": 100,
+            "vlan_name": "web",
+        }
+    )
     assert not p.evaluate(bad, now=OUTSIDE, emergency=True).allowed
 
 

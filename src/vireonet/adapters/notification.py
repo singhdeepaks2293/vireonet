@@ -19,9 +19,17 @@ class NotificationAdapter(BaseAdapter):
     """
 
     def __init__(
-        self, config: AdapterConfig, *, smtp_host: str = "", smtp_port: int = 587,
-        smtp_username: str = "", smtp_password: str = "", email_from: str = "vireonet@example.com",
-        email_to: str = "", teams_webhook_url: str = "", slack_webhook_url: str = "",
+        self,
+        config: AdapterConfig,
+        *,
+        smtp_host: str = "",
+        smtp_port: int = 587,
+        smtp_username: str = "",
+        smtp_password: str = "",
+        email_from: str = "vireonet@example.com",
+        email_to: str = "",
+        teams_webhook_url: str = "",
+        slack_webhook_url: str = "",
         correlation_id: str | None = None,
     ) -> None:
         super().__init__(config, correlation_id=correlation_id)
@@ -39,15 +47,31 @@ class NotificationAdapter(BaseAdapter):
 
     async def health_check(self) -> AdapterHealth:
         configured = bool(self.teams_webhook_url or self.slack_webhook_url or self.smtp_host)
-        return AdapterHealth(name=self.name, status="ok" if configured else "down", capabilities=self.capabilities(), detail="" if configured else "no notification channel configured")
+        return AdapterHealth(
+            name=self.name,
+            status="ok" if configured else "down",
+            capabilities=self.capabilities(),
+            detail="" if configured else "no notification channel configured",
+        )
 
     async def send(self, channel: str, title: str, body: str, ticket: str) -> bool:
         if channel == "email":
             return await self._send_email(title, body, ticket)
         if channel == "teams":
-            return await self._send_webhook(self.teams_webhook_url, {"@type": "MessageCard", "@context": "https://schema.org/extensions", "summary": title, "title": title, "text": f"{body}\nTicket: {ticket}"})
+            return await self._send_webhook(
+                self.teams_webhook_url,
+                {
+                    "@type": "MessageCard",
+                    "@context": "https://schema.org/extensions",
+                    "summary": title,
+                    "title": title,
+                    "text": f"{body}\nTicket: {ticket}",
+                },
+            )
         if channel == "slack":
-            return await self._send_webhook(self.slack_webhook_url, {"text": f"*{title}*\n{body}\nTicket: {ticket}"})
+            return await self._send_webhook(
+                self.slack_webhook_url, {"text": f"*{title}*\n{body}\nTicket: {ticket}"}
+            )
         raise AdapterValidationError(self.name, "send", f"unknown channel {channel}")
 
     async def _send_webhook(self, url: str, payload: dict[str, Any]) -> bool:

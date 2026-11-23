@@ -9,7 +9,12 @@ from vireonet.intent import parse_intent
 from vireonet.models import AuditLog, Change
 from vireonet.state_machine import ChangeState, record_transition
 
-BASE = {"devices": ["leaf-01"], "site": "dc1", "ticket_number": "RITM0001234", "requested_by": "alice"}
+BASE = {
+    "devices": ["leaf-01"],
+    "site": "dc1",
+    "ticket_number": "RITM0001234",
+    "requested_by": "alice",
+}
 
 
 async def test_change_and_audit_persisted(session: AsyncSession) -> None:
@@ -25,7 +30,11 @@ async def test_change_and_audit_persisted(session: AsyncSession) -> None:
     session.add(change)
     await session.flush()
     await record_transition(
-        session, change, ChangeState.VALIDATED, actor="vireonet", reason="NetBox objects exist",
+        session,
+        change,
+        ChangeState.VALIDATED,
+        actor="vireonet",
+        reason="NetBox objects exist",
         evidence={"device": "leaf-01"},
     )
     await session.commit()
@@ -38,8 +47,24 @@ async def test_change_and_audit_persisted(session: AsyncSession) -> None:
 
 
 async def test_ticket_number_unique(session: AsyncSession) -> None:
-    session.add(Change(ticket_number="RITM1", change_type="vlan_add", state=ChangeState.RECEIVED, intent={}, devices=[]))
+    session.add(
+        Change(
+            ticket_number="RITM1",
+            change_type="vlan_add",
+            state=ChangeState.RECEIVED,
+            intent={},
+            devices=[],
+        )
+    )
     await session.flush()
-    session.add(Change(ticket_number="RITM1", change_type="vlan_add", state=ChangeState.RECEIVED, intent={}, devices=[]))
+    session.add(
+        Change(
+            ticket_number="RITM1",
+            change_type="vlan_add",
+            state=ChangeState.RECEIVED,
+            intent={},
+            devices=[],
+        )
+    )
     with pytest.raises(IntegrityError):
         await session.flush()

@@ -10,7 +10,9 @@ from vireonet.structlog_config import redact
 
 def test_metrics_endpoint_exposes_vireonet_metrics() -> None:
     record_change("closed")
-    client = TestClient(create_app(Settings(adapter_mode="fake", database_url="sqlite+aiosqlite:///:memory:")))
+    client = TestClient(
+        create_app(Settings(adapter_mode="fake", database_url="sqlite+aiosqlite:///:memory:"))
+    )
     resp = client.get("/metrics")
     assert resp.status_code == 200
     assert "vireonet_changes_total" in resp.text

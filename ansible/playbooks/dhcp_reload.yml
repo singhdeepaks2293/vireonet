@@ -1,0 +1,33 @@
+---
+- name: DHCP reload — validate config syntax, then reload the DHCP service
+  hosts: all
+  gather_facts: false
+  vars:
+    dhcp_config_path: "{{ config_path | default('/etc/dhcp/dhcpd.conf') }}"
+    dhcp_server: "{{ server | default('isc') }}"
+  tasks:
+    - name: Validate ISC dhcpd config syntax (controller)
+      ansible.builtin.command:
+        cmd: "dhcpd -t -cf {{ dhcp_config_path }}"
+      delegate_to: localhost
+      changed_when: false
+      when: dhcp_server == 'isc'
+
+    - name: Validate Kea DHCPv4 config syntax (controller)
+      ansible.builtin.command:
+        cmd: "kea-dhcp4 -t {{ dhcp_config_path }}"
+      delegate_to: localhost
+      changed_when: false
+      when: dhcp_server == 'kea'
+
+    - name: Reload ISC dhcpd service
+      ansible.builtin.service:
+        name: dhcpd
+        state: reloaded
+      when: dhcp_server == 'isc'
+
+    - name: Reload Kea DHCPv4 service
+      ansible.builtin.service:
+        name: kea-dhcp4
+        state: reloaded
+      when: dhcp_server == 'kea'

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -35,16 +36,20 @@ def _lock_service(request: Request) -> DeviceLockService:
     svc = request.app.state.lock_service
     if svc is None:
         raise HTTPException(status_code=503, detail="lock service not configured")
-    return svc
+    return cast(DeviceLockService, svc)
 
 
 @router.get("/locks", response_model=list[LockResponse])
-async def list_locks(request: Request, _role: str = Depends(require_role("viewer"))) -> list[LockResponse]:
+async def list_locks(
+    request: Request, _role: str = Depends(require_role("viewer"))
+) -> list[LockResponse]:
     svc = _lock_service(request)
     locks = await svc.list()
     return [
         LockResponse(
-            device=lock.device, ticket_number=lock.ticket_number, holder=lock.holder,
+            device=lock.device,
+            ticket_number=lock.ticket_number,
+            holder=lock.holder,
             acquired_at=lock.created_at.isoformat() if lock.created_at else None,
             expires_at=lock.expires_at.isoformat() if lock.expires_at else None,
         )
@@ -53,7 +58,9 @@ async def list_locks(request: Request, _role: str = Depends(require_role("viewer
 
 
 @router.post("/locks/{device}/release", status_code=202)
-async def release_lock(device: str, request: Request, _role: str = Depends(require_role("operator"))) -> dict[str, str]:
+async def release_lock(
+    device: str, request: Request, _role: str = Depends(require_role("operator"))
+) -> dict[str, str]:
     svc = _lock_service(request)
     released = await svc.release_any(device)
     if not released:
@@ -62,7 +69,9 @@ async def release_lock(device: str, request: Request, _role: str = Depends(requi
 
 
 @router.get("/change-windows", response_model=list[ChangeWindowResponse])
-async def list_change_windows(request: Request, _role: str = Depends(require_role("viewer"))) -> list[ChangeWindowResponse]:
+async def list_change_windows(
+    request: Request, _role: str = Depends(require_role("viewer"))
+) -> list[ChangeWindowResponse]:
     # Read from the same policy file the validator enforces (M2), so UI and
     # policy cannot disagree. Path is configurable via settings in main.py.
     policy_path = getattr(request.app.state.settings, "policy_path", "policies/default.yaml")
@@ -84,13 +93,21 @@ async def list_change_windows(request: Request, _role: str = Depends(require_rol
             candidate = now + timedelta(days=offset)
             if candidate.strftime("%a") in days:
                 hh, mm = start.split(":")
-                next_start = candidate.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0).isoformat()
+                next_start = candidate.replace(
+                    hour=int(hh), minute=int(mm), second=0, microsecond=0
+                ).isoformat()
                 if candidate.date() == now.date() and now.strftime("%H:%M") >= start:
                     continue
                 break
-        out.append(ChangeWindowResponse(
-            days=days, start=start, end=end, timezone=tz,
-            emergency_bypasses_window=bool(data.get("emergency_bypasses_window", True)),
-            currently_in_window=in_window, next_window_start=next_start,
-        ))
+        out.append(
+            ChangeWindowResponse(
+                days=days,
+                start=start,
+                end=end,
+                timezone=tz,
+                emergency_bypasses_window=bool(data.get("emergency_bypasses_window", True)),
+                currently_in_window=in_window,
+                next_window_start=next_start,
+            )
+        )
     return out

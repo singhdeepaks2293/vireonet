@@ -1,4 +1,5 @@
 """Create the first admin user once, from env. Run: VIREONET_ADMIN_USER=admin VIREONET_ADMIN_PASSWORD=<12+ chars> python scripts/seed_admin.py"""
+
 import asyncio
 import os
 import sys
@@ -24,6 +25,7 @@ async def main() -> None:
         return
     await svc.create(username=username, display_name=username, password=password, role="admin")
     print(f"Admin user {username} created.")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

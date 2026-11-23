@@ -17,8 +17,15 @@ class VaultAdapter(BaseAdapter):
     """
 
     def __init__(
-        self, config: AdapterConfig, *, addr: str = "", role_id: str = "", secret_id: str = "",
-        kv_mount: str = "secret", bootstrap_policy: str = "bootstrap", client: Any | None = None,
+        self,
+        config: AdapterConfig,
+        *,
+        addr: str = "",
+        role_id: str = "",
+        secret_id: str = "",
+        kv_mount: str = "secret",
+        bootstrap_policy: str = "bootstrap",
+        client: Any | None = None,
         correlation_id: str | None = None,
     ) -> None:
         super().__init__(config, correlation_id=correlation_id)
@@ -43,9 +50,16 @@ class VaultAdapter(BaseAdapter):
             client = self._get_client()
             health = client.sys.read_health_status(method="GET")
             ok = bool(health.get("initialized") and not health.get("sealed"))
-            return AdapterHealth(name=self.name, status="ok" if ok else "down", capabilities=self.capabilities(), detail="" if ok else "vault sealed or not initialised")
+            return AdapterHealth(
+                name=self.name,
+                status="ok" if ok else "down",
+                capabilities=self.capabilities(),
+                detail="" if ok else "vault sealed or not initialised",
+            )
         except Exception as exc:  # noqa: BLE001 — health must not raise
-            return AdapterHealth(name=self.name, status="down", detail=str(exc), capabilities=self.capabilities())
+            return AdapterHealth(
+                name=self.name, status="down", detail=str(exc), capabilities=self.capabilities()
+            )
 
     async def _ensure_auth(self) -> Any:
         client = self._get_client()
@@ -91,7 +105,9 @@ class VaultAdapter(BaseAdapter):
         """
         client = await self._ensure_auth()
         try:
-            resp = client.auth.token.create(ttl="15m", policies=[self.bootstrap_policy], meta={"device": device})
+            resp = client.auth.token.create(
+                ttl="15m", policies=[self.bootstrap_policy], meta={"device": device}
+            )
         except Exception as exc:
             raise AdapterUnavailable(self.name, "issue_bootstrap_token", str(exc)) from exc
         token = resp.get("auth", {}).get("client_token", "") if isinstance(resp, dict) else ""

@@ -3,7 +3,12 @@ from __future__ import annotations
 from vireonet.intent import parse_intent
 from vireonet.planner import plan
 
-BASE = {"devices": ["leaf-01", "leaf-02", "leaf-03"], "site": "dc1", "ticket_number": "RITM1", "requested_by": "alice"}
+BASE = {
+    "devices": ["leaf-01", "leaf-02", "leaf-03"],
+    "site": "dc1",
+    "ticket_number": "RITM1",
+    "requested_by": "alice",
+}
 
 
 def test_plan_waves_and_blast_radius() -> None:
