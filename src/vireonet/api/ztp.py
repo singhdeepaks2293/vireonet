@@ -113,7 +113,11 @@ async def list_devices(
 
 
 @router.post("/ztp/devices", status_code=202)
-async def register_device(payload: RegisterDeviceRequest, request: Request) -> dict[str, object]:
+async def register_device(
+    payload: RegisterDeviceRequest,
+    request: Request,
+    _role: str = Depends(require_role("operator")),
+) -> dict[str, object]:
     svc = _ztp_service(request)
     device, created = await svc.register_device(
         hostname=payload.hostname,
@@ -168,7 +172,11 @@ async def device_callback(payload: CallbackRequest, request: Request) -> dict[st
 
 
 @router.get("/ztp/devices/{serial}")
-async def get_device(serial: str, request: Request) -> dict[str, object]:
+async def get_device(
+    serial: str,
+    request: Request,
+    _role: str = Depends(require_role("viewer")),
+) -> dict[str, object]:
     svc = _ztp_service(request)
     device = await svc.get_by_serial(serial)
     if device is None:
