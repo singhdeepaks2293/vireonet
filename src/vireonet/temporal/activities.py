@@ -30,6 +30,7 @@ from vireonet.planner import plan as make_plan
 from vireonet.policy import PolicyEngine
 from vireonet.reconciliation.service import ReconciliationService
 from vireonet.safety import DeviceLockService, LockHeldError, run_waves
+from vireonet.services.backup import BEGIN_MARKER, extract_running_config
 from vireonet.state_machine import ChangeState, record_transition
 from vireonet.validation import validate_intent
 
