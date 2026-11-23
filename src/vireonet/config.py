@@ -90,6 +90,10 @@ class Settings(BaseSettings):
     dhcp_verify_retries: int = 12
     dhcp_verify_interval_seconds: float = 5.0
     ztp_token_ttl_seconds: int = 900
+    # Site-specific provisioning defaults. For multi-site deployments, define
+    # these in a per-site provisioning profile rather than sharing one pool.
+    ztp_ip_pool: str = "10.0.1.0/24"
+    ztp_management_interface: str = "GigabitEthernet0/0"
 
     # Notifications (M7)
     notification_email_to: str = ""
