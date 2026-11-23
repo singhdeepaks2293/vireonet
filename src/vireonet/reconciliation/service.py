@@ -75,6 +75,13 @@ class ReconciliationService:
         drift_records: list[str] = []
         git_commit: str | None = None
 
+        # A failed collection is not a baseline. Do not commit empty/partial state.
+        if not collect_result.ok:
+            return ReconcileOutcome(
+                status="reconciliation_pending",
+                failures=[f"state collection failed: {collect_result.status.value}"],
+                evidence={"awx_job_id": awx_job_id, "collection_status": collect_result.status.value},
+            )
         # 1. Baseline: normalize the collected running config, store it, commit it.
         raw = (
             collect_result.output.get("running_config")
@@ -87,7 +94,19 @@ class ReconciliationService:
             # Fall back to the raw text when the markers do not parse.
             with suppress(ValueError):
                 raw = extract_running_config(raw)
+        if not raw.strip():
+            return ReconcileOutcome(
+                status="reconciliation_pending",
+                failures=["state collection returned an empty running configuration"],
+                evidence={"awx_job_id": awx_job_id, "collection_status": collect_result.status.value},
+            )
         normalized = normalize_config(raw)
+        if not normalized.strip():
+            return ReconcileOutcome(
+                status="reconciliation_pending",
+                failures=["normalized running configuration is empty"],
+                evidence={"awx_job_id": awx_job_id},
+            )
         baseline_hash = config_hash(normalized)
         running_hash = baseline_hash
         # 1. Baseline: shared idempotent commit (D1 drift.baseline) —
