@@ -23,6 +23,8 @@ async def test_gitlab_create_mr_and_merge() -> None:
     respx.post(url__regex=r".*/repository/branches.*").mock(
         return_value=Response(201, json={"name": "change/RITM1"})
     )
+    # commit_files checks existence first; 404 -> "create" action.
+    respx.get(url__regex=r".*/repository/files/.*").mock(return_value=Response(404, json={}))
     respx.post(url__regex=r".*/repository/commits.*").mock(
         return_value=Response(201, json={"id": "abc"})
     )

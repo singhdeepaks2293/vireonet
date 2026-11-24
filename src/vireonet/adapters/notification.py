@@ -11,6 +11,27 @@ from vireonet.adapters.base import AdapterConfig, AdapterHealth, BaseAdapter, cr
 from vireonet.adapters.errors import AdapterUnavailable, AdapterValidationError
 
 
+def _teams_payload(title: str, body: str) -> dict[str, Any]:
+    """Teams Workflows ("Post to a channel when a webhook request is received") payload."""
+    return {
+        "type": "message",
+        "attachments": [
+            {
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "body": [
+                        {"type": "TextBlock", "text": title, "weight": "Bolder", "wrap": True},
+                        {"type": "TextBlock", "text": body, "wrap": True},
+                    ],
+                },
+            }
+        ],
+    }
+
+
 class NotificationAdapter(BaseAdapter):
     """Real notifications: SMTP email, Teams webhook, Slack webhook.
 
@@ -58,15 +79,10 @@ class NotificationAdapter(BaseAdapter):
         if channel == "email":
             return await self._send_email(title, body, ticket)
         if channel == "teams":
+            # Office 365 connectors (MessageCard) are retired; Teams Workflows
+            # webhooks take a message with an Adaptive Card attachment.
             return await self._send_webhook(
-                self.teams_webhook_url,
-                {
-                    "@type": "MessageCard",
-                    "@context": "https://schema.org/extensions",
-                    "summary": title,
-                    "title": title,
-                    "text": f"{body}\nTicket: {ticket}",
-                },
+                self.teams_webhook_url, _teams_payload(title, f"{body}\nTicket: {ticket}")
             )
         if channel == "slack":
             return await self._send_webhook(
@@ -82,7 +98,8 @@ class NotificationAdapter(BaseAdapter):
                 resp = await client.post(url, json=payload)
             except httpx.HTTPError as exc:
                 raise AdapterUnavailable(self.name, "send_webhook", str(exc)) from exc
-            return resp.status_code < 300
+            # Teams Workflows webhooks answer 202 Accepted; Slack answers 200.
+            return 200 <= resp.status_code < 300
 
     async def _send_email(self, title: str, body: str, ticket: str) -> bool:
         if not self.smtp_host or not self.email_to:

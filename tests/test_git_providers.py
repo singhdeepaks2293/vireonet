@@ -18,14 +18,11 @@ async def test_github_open_pr_and_pipeline():
                 "number": 7,
                 "title": "RITM0001234: Add VLAN 100",
                 "state": "open",
-                "head": {"ref": "change/RITM0001234"},
+                "head": {"ref": "change/RITM0001234", "sha": "abc123"},
                 "base": {"ref": "main"},
                 "html_url": "https://github.com/acme/intent/pull/7",
             },
         )
-    )
-    respx.get("https://api.github.com/repos/acme/intent/pulls/7/commits").mock(
-        return_value=Response(200, json=[{"sha": "abc123"}])
     )
     respx.get("https://api.github.com/repos/acme/intent/commits/abc123/check-runs").mock(
         return_value=Response(

@@ -86,11 +86,12 @@ async def create_temporal_schedule(client: Any, spec: DriftScheduleSpec) -> str:
             ),
             spec=ScheduleSpec(cron_expressions=[spec.cron]),
         )
-        handle = await client.create_schedule(
-            spec.name,
-            schedule,
-            id=spec.name,
-        )
+        try:
+            handle = await client.create_schedule(spec.name, schedule)
+        except Exception as exc:  # noqa: BLE001 — already there is fine
+            if "already" in str(exc).lower():
+                return spec.name
+            raise
     except (AttributeError, TypeError) as exc:
         raise RuntimeError(
             "temporalio schedule API differs from the expected shape; "

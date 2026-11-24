@@ -6,9 +6,10 @@ CLI is the interface — ``_run_cli`` is the one place that knows about it,
 so a future API-based implementation only has to replace that method.
 
 UNCERTAIN: no stable REST API known; the CLI is the interface. Containerlab
-``inspect --format json`` output shape is handled in both shapes seen in
-the wild (``{"containers": [...]}`` and a top-level list); unknown fields
-are ignored, never invented.
+``inspect --format json`` output is handled in the current shape
+(``{"<labname>": [...]}``, keyed by lab name) and the older shapes
+(``{"containers": [...]}`` and a top-level list); unknown fields are
+ignored, never invented.
 """
 
 from __future__ import annotations
@@ -29,7 +30,9 @@ from vireonet.adapters.lab import LabNode
 def _parse_inspect(raw: str, lab_id: str) -> list[LabNode]:
     """Parse ``containerlab inspect --format json`` output.
 
-    Handles both ``{"containers": [...]}`` and a top-level list. Each
+    Handles the current ``{"<labname>": [...]}`` shape (entries carry
+    ``ipv4_address`` and ``state``), plus the older ``{"containers": [...]}``
+    and a top-level list. Each
     entry contributes name / kind / ipv4 -> mgmt_ip / state. Containerlab
     names containers ``clab-<lab>-<node>``; that prefix is stripped so the
     node name matches the topology. The CIDR suffix on an IPv4 address is
@@ -40,7 +43,14 @@ def _parse_inspect(raw: str, lab_id: str) -> list[LabNode]:
     except json.JSONDecodeError as exc:
         raise AdapterUnavailable("containerlab", "inspect", "inspect output is not JSON") from exc
     if isinstance(data, dict):
-        entries = data.get("containers", [])
+        if "containers" in data:
+            entries = data["containers"]
+        elif lab_id in data:
+            entries = data[lab_id]
+        else:
+            # Keyed by lab name: take every list value (e.g. --all, or a
+            # lab whose name differs from lab_id only in the topology).
+            entries = [e for v in data.values() if isinstance(v, list) for e in v]
     elif isinstance(data, list):
         entries = data
     else:

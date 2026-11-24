@@ -1,47 +1,58 @@
-/* Design tokens. Every component uses these via Tailwind, never a hardcoded colour or size.
-   Light and dark are the same tokens with different values. No gradients, no shadows. */
+/* Design tokens, KDE Plasma "Breeze" inspired: window grey, white views,
+   highlight blue for selection/focus. Every component uses these via
+   Tailwind, never a hardcoded colour. Light = Breeze, dark = Breeze Dark.
+   Text colours are darkened from the Breeze palette where needed to keep
+   WCAG AA contrast. Shadows are subtle (frames), never decorative. */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --color-bg: #f4f4f5;
-  --color-surface: #ffffff;
-  --color-surface-muted: #ececee;
-  --color-border: #d4d4d8;
-  --color-text: #18181b;
-  --color-text-muted: #52525b;
-  --color-accent: #1a5fb4;
+  --color-bg: #eff0f1;              /* Breeze window */
+  --color-surface: #fcfcfc;         /* Breeze view */
+  --color-surface-muted: #e3e5e7;   /* alternate / header */
+  --color-border: #c4c9cd;
+  --color-text: #232627;
+  --color-text-muted: #5b6064;
+  --color-accent: #1a6ea8;          /* links, accent text (AA on view) */
   --color-accent-foreground: #ffffff;
-  --color-success: #1e7a34;
-  --color-success-bg: #e6f4ea;
-  --color-warning: #8a6100;
-  --color-warning-bg: #fef3c7;
-  --color-danger: #b42318;
-  --color-danger-bg: #fef3f2;
-  --color-info: #1a5fb4;
-  --color-info-bg: #e8f0fe;
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --color-highlight: #3daee9;       /* Breeze highlight: selection, focus */
+  --color-highlight-soft: #dcf0fb;
+  --color-success: #1e7c45;
+  --color-success-bg: #e3f4ea;
+  --color-warning: #9a4c00;
+  --color-warning-bg: #fdeedd;
+  --color-danger: #b8323f;
+  --color-danger-bg: #fbe7e9;
+  --color-info: #1a6ea8;
+  --color-info-bg: #e2f1fb;
+  --shadow-frame: 0 1px 2px rgba(35, 38, 39, 0.08), 0 0 0 1px rgba(35, 38, 39, 0.04);
+  --radius: 3px;
+  --radius-frame: 6px;
+  --font-sans: "Noto Sans", "Noto Sans UI", Cantarell, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Hack", "Noto Sans Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 [data-theme="dark"] {
-  --color-bg: #121214;
-  --color-surface: #1c1c1f;
-  --color-surface-muted: #262629;
-  --color-border: #3f3f46;
-  --color-text: #f4f4f5;
-  --color-text-muted: #a1a1aa;
-  --color-accent: #6ea8fe;
-  --color-accent-foreground: #0b1220;
-  --color-success: #4ade80;
-  --color-success-bg: #12291a;
-  --color-warning: #fbbf24;
-  --color-warning-bg: #2e2305;
-  --color-danger: #fca5a5;
-  --color-danger-bg: #2e1210;
-  --color-info: #6ea8fe;
-  --color-info-bg: #12233d;
+  --color-bg: #2a2e32;              /* Breeze Dark window */
+  --color-surface: #1b1e20;         /* Breeze Dark view */
+  --color-surface-muted: #31363b;
+  --color-border: #4d5359;
+  --color-text: #fcfcfc;
+  --color-text-muted: #a4abb2;
+  --color-accent: #4fb3f0;
+  --color-accent-foreground: #0d1b24;
+  --color-highlight: #3daee9;
+  --color-highlight-soft: #1c3a4c;
+  --color-success: #4cc77f;
+  --color-success-bg: #163222;
+  --color-warning: #f6a34b;
+  --color-warning-bg: #3a2711;
+  --color-danger: #f07580;
+  --color-danger-bg: #3d1a1e;
+  --color-info: #4fb3f0;
+  --color-info-bg: #15303f;
+  --shadow-frame: 0 1px 3px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0, 0, 0, 0.25);
 }
 
 html { font-size: 14px; }
@@ -53,12 +64,53 @@ body {
   line-height: 1.5;
   margin: 0;
 }
-a { color: var(--color-accent); }
-a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+a { color: var(--color-accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3 { font-weight: 600; }
+
+/* Focus: Breeze highlight ring. */
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--color-highlight);
+  outline-offset: 1px;
 }
-table { border-collapse: collapse; width: 100%; }
-th, td { border-bottom: 1px solid var(--color-border); text-align: left; padding: 8px; }
-thead th { position: sticky; top: 0; background: var(--color-surface); font-size: 13px; color: var(--color-text-muted); }
+
+/* Form controls, Breeze style: flat field, highlight border on focus. */
+select, textarea, input:not([type="checkbox"]):not([type="radio"]) {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  min-height: 28px;
+}
+select:hover, textarea:hover, input:not([type="checkbox"]):not([type="radio"]):hover { border-color: var(--color-highlight); }
+select:focus, textarea:focus, input:not([type="checkbox"]):not([type="radio"]):focus {
+  border-color: var(--color-highlight);
+  box-shadow: 0 0 0 2px var(--color-highlight-soft);
+  outline: none;
+}
+input[type="checkbox"], input[type="radio"] { accent-color: var(--color-highlight); }
+
+/* Tables, Breeze item views. */
+table { border-collapse: collapse; width: 100%; background: var(--color-surface); }
+th, td { border-bottom: 1px solid var(--color-border); text-align: left; padding: 6px 8px; }
+thead th {
+  position: sticky; top: 0;
+  background: var(--color-surface-muted);
+  font-size: 13px; font-weight: 600;
+  color: var(--color-text-muted);
+}
+tbody tr:hover { background: var(--color-highlight-soft); }
+
 code, .mono { font-family: var(--font-mono); font-size: 13px; }
+pre { border-radius: var(--radius); }
+
+/* The framed content area (a Breeze "view"). */
+.frame {
+  background: var(--color-surface);
+  border-radius: var(--radius-frame);
+  box-shadow: var(--shadow-frame);
+}
+
+/* Thin Breeze-like scrollbars. */
+* { scrollbar-width: thin; scrollbar-color: var(--color-border) transparent; }

@@ -59,13 +59,23 @@ def _device(row: dict[str, Any]) -> NetBoxDevice:
 
 
 class NetBoxAdapter(BaseAdapter):
-    """Real NetBox REST API adapter. Token auth: Authorization: Token <token>."""
+    """Real NetBox REST API adapter.
+
+    Auth: NetBox 4.5+ v2 API tokens (prefixed ``nbt_``) are sent as
+    ``Authorization: Bearer <token>``; legacy v1 tokens keep
+    ``Authorization: Token <token>``.
+    https://netboxlabs.com/docs/netbox/integrations/rest-api/
+    """
 
     def __init__(
         self, config: AdapterConfig, *, token: str = "", correlation_id: str | None = None
     ) -> None:
         super().__init__(config, correlation_id=correlation_id)
         self.token = token
+
+    def _auth_header(self) -> str:
+        scheme = "Bearer" if self.token.startswith("nbt_") else "Token"
+        return f"{scheme} {self.token}"
 
     def capabilities(self) -> list[str]:
         return ["devices", "interfaces", "vlans", "ips", "journal", "inventory_export", "bulk"]
@@ -89,7 +99,7 @@ class NetBoxAdapter(BaseAdapter):
         idempotent: bool,
     ) -> Any:
         async def do() -> Any:
-            headers = {"Authorization": f"Token {self.token}"}
+            headers = {"Authorization": self._auth_header()}
             if self.correlation_id:
                 headers["X-Correlation-ID"] = self.correlation_id
             async with create_http_client(
@@ -195,6 +205,31 @@ class NetBoxAdapter(BaseAdapter):
     async def list_interfaces(self, device: str) -> list[str]:
         rows = await self._get_all("/api/dcim/interfaces/", {"device": device})
         return [str(r.get("name", "")) for r in rows]
+
+    async def list_cables(self, site: str | None = None) -> list[dict[str, str]]:
+        """Interface-to-interface cables: {a_device, a_interface, b_device, b_interface}.
+
+        NetBox 3.3+ (a_terminations / b_terminations lists). Cables to
+        circuits, power or front/rear ports are skipped.
+        """
+        params: dict[str, Any] = {"site": site} if site else {}
+        rows = await self._get_all("/api/dcim/cables/", params)
+        out: list[dict[str, str]] = []
+        for r in rows:
+            a = (r.get("a_terminations") or [{}])[0]
+            b = (r.get("b_terminations") or [{}])[0]
+            if a.get("object_type") != "dcim.interface" or b.get("object_type") != "dcim.interface":
+                continue
+            ao, bo = a.get("object") or {}, b.get("object") or {}
+            out.append(
+                {
+                    "a_device": str((ao.get("device") or {}).get("name", "")),
+                    "a_interface": str(ao.get("name", "")),
+                    "b_device": str((bo.get("device") or {}).get("name", "")),
+                    "b_interface": str(bo.get("name", "")),
+                }
+            )
+        return out
 
     async def get_vlan(self, vlan_id: int, site: str | None = None) -> NetBoxVlan | None:
         params: dict[str, Any] = {"vid": vlan_id}

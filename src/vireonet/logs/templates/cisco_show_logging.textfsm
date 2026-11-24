@@ -1,0 +1,15 @@
+Value TIMESTAMP (\*?(?:\d{4}\s+)?[A-Z][a-z]{2}\s+\d+\s+(?:\d{4}\s+)?\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:\s+[A-Z]{3,4})?)
+Value HOST (\S*)
+Value FACILITY ([A-Z0-9_]+)
+Value SEVERITY ([0-7])
+Value MNEMONIC ([A-Z0-9_]+)
+Value MESSAGE (.*)
+
+# Cisco IOS / IOS-XE:  000123: *Nov 23 10:15:01.123 UTC: %LINK-3-UPDOWN: Interface Gi1/0/2, changed state to down
+# Cisco NX-OS:         2026 Nov 23 10:15:01 leaf-02 %ETHPORT-5-IF_DOWN_LINK_FAILURE: Interface Ethernet1/49 is down
+# Arista EOS:          Nov 23 10:15:01 leaf-03 Ebra: %LINEPROTO-5-UPDOWN: Line protocol on Interface Ethernet1, changed state to down
+Start
+  ^(?:\d+:\s+)?${TIMESTAMP}:\s+%${FACILITY}-${SEVERITY}-${MNEMONIC}:\s+${MESSAGE} -> Record
+  ^${TIMESTAMP}\s+${HOST}\s+%${FACILITY}-${SEVERITY}-${MNEMONIC}:\s+${MESSAGE} -> Record
+  ^${TIMESTAMP}\s+${HOST}\s+\S+:\s+%${FACILITY}-${SEVERITY}-${MNEMONIC}:\s+${MESSAGE} -> Record
+  ^.* -> Next

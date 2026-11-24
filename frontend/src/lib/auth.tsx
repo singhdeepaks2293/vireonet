@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
-import { api } from "./api";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { api, UNAUTHORIZED_EVENT } from "./api";
 
 export type Role = "viewer" | "operator" | "approver" | "admin";
 
@@ -24,6 +24,8 @@ function usernameFromToken(token: string): string {
 
 interface AuthState {
   token: string | null;
+  /** True when the last session ended because the API rejected the token. */
+  expired: boolean;
   role: Role;
   username: string;
   login: (username: string, password: string) => Promise<void>;
@@ -35,9 +37,16 @@ const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem("vireonet-token"));
+  const [expired, setExpired] = useState(false);
+  useEffect(() => {
+    const onUnauthorized = () => { setExpired(true); setToken(null); };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+  }, []);
   const login = async (username: string, password: string) => {
     const res = await api.login({ username, password });
     localStorage.setItem("vireonet-token", res.access_token);
+    setExpired(false);
     setToken(res.access_token);
   };
   const logout = () => {
@@ -47,7 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const role: Role = token ? roleFromToken(token) : "viewer";
   const username = token ? usernameFromToken(token) : "";
   const can = (minimum: Role) => RANK[role] >= RANK[minimum];
-  return <AuthContext.Provider value={{ token, role, username, login, logout, can }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ token, expired, role, username, login, logout, can }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthState {

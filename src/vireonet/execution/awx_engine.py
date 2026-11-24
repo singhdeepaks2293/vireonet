@@ -7,6 +7,8 @@ status (when the adapter supports polling), and reads the stdout tail.
 
 from __future__ import annotations
 
+import json
+import re
 import time
 from typing import Any
 
@@ -70,6 +72,27 @@ class AwxEngine:
 
     async def collect_state(self, req: StepRequest) -> StepResult:
         return await self._run(req.model_copy(update={"step": "collect_state"}))
+
+    async def run_commands(self, req: StepRequest) -> StepResult:
+        """Run read-only show commands (template checks).
+
+        The run-commands playbook prints the outputs as a JSON list between
+        VIREONET-COMMANDS-BEGIN/END markers, in the order of
+        extra_vars["commands"]. A job that succeeds without the markers is a
+        failed step: a check must never pass on output it did not see.
+        """
+        result = await self._run(req.model_copy(update={"step": "run_commands"}))
+        outputs = parse_command_outputs(str(result.output.get("stdout", "")))
+        if result.ok and outputs is None:
+            return result.model_copy(
+                update={
+                    "status": StepStatus.FAILED,
+                    "evidence": {**result.evidence, "error": "no VIREONET-COMMANDS block"},
+                }
+            )
+        return result.model_copy(
+            update={"output": {**result.output, "command_outputs": outputs or []}}
+        )
 
     async def health_check(self) -> AdapterHealth:
         return await self._awx.health_check()
@@ -220,3 +243,26 @@ class AwxEngine:
             if isinstance(data, dict) and "vireonet_result" in data:
                 return {"vireonet_result": data["vireonet_result"]}
         return {}
+
+
+_COMMANDS_RE = re.compile(r"VIREONET-COMMANDS-BEGIN\s*(.*?)\s*VIREONET-COMMANDS-END", re.DOTALL)
+
+
+def parse_command_outputs(stdout: str) -> list[str] | None:
+    """Command outputs from the run-commands playbook markers, or None.
+
+    Ansible's debug module prints the marker block inside a JSON-escaped
+    "msg" string, so the payload may be escaped once; both forms parse.
+    """
+    match = _COMMANDS_RE.search(stdout)
+    if match is None:
+        return None
+    raw = match.group(1)
+    for candidate in (raw, raw.encode().decode("unicode_escape")):
+        try:
+            parsed = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(parsed, list):
+            return [str(x) for x in parsed]
+    return None

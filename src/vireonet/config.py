@@ -23,14 +23,87 @@ class Settings(BaseSettings):
     temporal_address: str = "localhost:7233"
     temporal_namespace: str = "default"
     temporal_task_queue: str = "vireonet-changes"
+    # auto: an in-memory fake Temporal client in fake adapter mode (unit tests,
+    # quick demos), the real server otherwise. real: always the real server, so
+    # fake adapters (simulated network, NetBox, ITSM) run full workflows.
+    temporal_mode: Literal["auto", "real", "fake"] = "auto"
     adapter_mode: AdapterMode = "fake"
     log_level: str = "INFO"
     api_token: str = ""
     webhook_secret: str = ""
     policy_file: str = "policies/default.yaml"
     execution_file: str = "policies/execution.yaml"
+    # Per-intent pre/post check templates. Missing file = built-in defaults.
+    check_templates_file: str = "policies/checks.yaml"
+    # Per-platform config render templates; override built-ins or add vendors.
+    render_templates_file: str = "policies/render_templates.yaml"
     lock_ttl_seconds: int = 1800
+    # After post-check passes, hold the change this long before reconciling
+    # so an operator can still request a rollback. 0 disables the window.
+    post_apply_soak_seconds: int = 0
     wave_size: int = 2
+    # After each wave, run that wave's post-check templates before starting
+    # the next one; a failure stops the rollout and rolls back.
+    wave_health_checks: bool = True
+    # Markdown file served on the in-app Help page (default: docs/USER_MANUAL.md).
+    user_manual_file: str = ""
+    # --- Gitea tab (shown when Gitea answers) ---
+    gitea_ui_url: str = ""  # browser address, e.g. https://vireonet.example/gitea
+    gitea_api_url: str = ""  # server-side API address, e.g. http://gitea:3000/api/v1
+    gitea_embed_url: str = ""  # address used inside VireoNet's page (same origin: /gitea/)
+    # Apply adapter settings saved in Adapters -> Configure at start.
+    adapter_config_from_db: bool = True
+    # gnmic metric-prefix (Prometheus telemetry preset gnmic); empty = none.
+    telemetry_metric_prefix: str = ""
+    # --- Log platforms (Elasticsearch, OpenSearch, Splunk, Loki, Graylog) ---
+    # JSON list: [{"name": "es", "type": "elasticsearch", "url": "https://es:9200",
+    #   "token_env": "ES_API_KEY", "index": "syslog-*", "export_index": "vireonet-events"}]
+    log_backends: str = "[]"
+    # Backends that receive VireoNet events (change finished, flow events, drift).
+    log_export_to: list[str] = []
+    # --- Vendor controllers ---
+    # JSON list: [{"name": "dnac-dc1", "type": "catalyst_center", "url": "https://…",
+    #   "username": "…", "password_env": "DNAC_PASSWORD", "verify_tls": true,
+    #   "options": {…}}]. Types: catalyst_center, cloudvision, mist, apstra,
+    # fortimanager, panorama, nsp, xiq, meraki, aruba_central.
+    controllers: str = "[]"
+    # Poll interval while a flow waits for a controller job (seconds).
+    controller_poll_seconds: int = 15
+    # --- Workflow builder (flows) ---
+    # Host patterns flows may call with "Call API" (fnmatch; "*" = any).
+    flow_http_allowed_hosts: list[str] = ["*"]
+    # Always refused: cloud metadata endpoints and link-local addresses.
+    flow_http_denied_hosts: list[str] = [
+        "169.254.0.0/16",
+        "metadata.google.internal",
+        "fd00:ec2::254/128",
+    ]
+    flow_http_verify_tls: bool = True
+    flow_scripts_enabled: bool = True
+    flow_script_max_seconds: int = 300
+    flow_script_memory_mb: int = 512
+    # local: a sandboxed subprocess on the worker; sidecar: the separate
+    # script-runner service (no secrets, read-only, internal network).
+    flow_script_runner: Literal["local", "sidecar"] = "local"
+    flow_script_runner_url: str = "http://script-runner:8100"
+    flow_script_runner_secret: str = ""
+    # Refuse to run scripts unless they run as non-root with no network.
+    flow_script_require_isolation: bool = False
+    # Modules flow scripts may import (empty = the safe default list).
+    flow_script_allowed_imports: list[str] = []
+    # Refuse "Call API" to private / loopback addresses (RFC 1918, 127/8, ::1).
+    flow_http_block_private: bool = False
+    # Token for the adapter event webhooks /webhooks/flows/source/<source>
+    # (header X-VireoNet-Event-Token or Bearer). Empty: VIREONET_WEBHOOK_SECRET.
+    flow_event_token: str = ""
+    # Optional Kafka trigger source; empty = off.
+    kafka_bootstrap: str = ""
+    kafka_group_id: str = "vireonet-flows"
+    kafka_auto_offset_reset: str = "latest"
+    kafka_security_protocol: str = "PLAINTEXT"
+    kafka_sasl_mechanism: str = ""
+    kafka_username: str = ""
+    kafka_password: str = ""
     abort_threshold: int = 1
 
     servicenow_base_url: str = ""
@@ -40,11 +113,52 @@ class Settings(BaseSettings):
     servicenow_username: str = ""
     servicenow_password: str = ""
 
+    # ITSM provider for ticket attachments (Excel config push), comments and
+    # closure: auto | none | fake | servicenow | jira | freshservice | bmc_helix.
+    # "auto" = fake in fake mode, ServiceNow in real mode when configured.
+    itsm_provider: Literal[
+        "auto", "none", "fake", "servicenow", "jira", "freshservice", "bmc_helix"
+    ] = "auto"
+    itsm_verify_tls: bool = True
+    jira_base_url: str = ""
+    jira_email: str = ""  # Jira Cloud: account email + API token
+    jira_api_token: str = ""
+    jira_pat: str = ""  # Jira Data Center / Server: personal access token
+    jira_close_transition: str = "Done"
+    freshservice_base_url: str = ""
+    freshservice_api_key: str = ""
+    bmc_base_url: str = ""
+    bmc_username: str = ""
+    bmc_password: str = ""
+    # Your own TextFSM templates: a directory with an ntc-style "index" file.
+    # They are tried before the bundled ntc-templates.
+    textfsm_user_dir: str = "policies/textfsm"
+    # End-to-end automation from the ITSM tool: a ticket entering one of these
+    # states (name or raw value, case-insensitive) triggers the Excel push.
+    # ServiceNow Change Request "Implement" is -1.
+    itsm_trigger_states: list[str] = ["implement", "-1"]
+    # When the ticket state triggers the push, that state is the approval (CAB
+    # in the ITSM tool): no approval click in VireoNet. False: still wait for
+    # an approver in VireoNet (manual approval of an automatic intake).
+    itsm_trigger_approves: bool = True
+    # Fully automatic pushes run only inside the ticket's planned window; with
+    # this on (default), a trigger without a planned start/end is refused.
+    itsm_require_planned_window: bool = True
+    jira_planned_start_field: str = ""  # e.g. customfield_10042
+    jira_planned_end_field: str = ""
+    # Site for changes created from a ticket that names none.
+    itsm_default_site: str = "dc1"
+    # Excel config push limits.
+    excel_max_bytes: int = 2_000_000
+    excel_max_device_config_bytes: int = 200_000
+
     netbox_base_url: str = ""
     netbox_token: str = ""
 
     awx_base_url: str = ""
     awx_token: str = ""
+    # AWX REST prefix: /api/v2 (AWX / AAP <= 2.4) or /api/controller/v2 (AAP 2.5+ gateway).
+    awx_api_prefix: str = "/api/v2"
     gitlab_base_url: str = ""
     gitlab_token: str = ""
     gitlab_project_id: str = ""
@@ -90,6 +204,14 @@ class Settings(BaseSettings):
     dhcp_verify_retries: int = 12
     dhcp_verify_interval_seconds: float = 5.0
     ztp_token_ttl_seconds: int = 900
+    # Machine registration of ZTP devices (POST /ztp/devices) without a user
+    # login: send X-VireoNet-ZTP-Token with this value. Empty = operator login only.
+    ztp_registration_token: str = ""
+    # /metrics: when set, Prometheus must send "Authorization: Bearer <token>".
+    metrics_token: str = ""
+    # Login lockout: this many failures for a username within the window.
+    login_max_failures: int = 5
+    login_lockout_seconds: int = 300
 
     # Notifications (M7)
     notification_email_to: str = ""
@@ -108,6 +230,21 @@ class Settings(BaseSettings):
     monitoring_token: str = ""
     monitoring_silence_minutes: int = 60
 
+    # Interface telemetry (traffic in/out) for topology and ML. none | fake |
+    # zabbix | prometheus | librenms | prtg | solarwinds. Fake adapter mode
+    # with "none" uses synthetic traffic. gNMI/gRPC streaming: run gnmic with
+    # its Prometheus output and use prometheus + preset "gnmic"; SNMP via
+    # snmp_exporter uses preset "snmp_exporter".
+    telemetry_backend: Literal[
+        "none", "fake", "zabbix", "prometheus", "librenms", "prtg", "solarwinds"
+    ] = "none"
+    telemetry_base_url: str = ""
+    telemetry_token: str = ""
+    telemetry_username: str = ""
+    telemetry_password: str = ""
+    telemetry_verify_tls: bool = True
+    telemetry_prometheus_preset: Literal["snmp_exporter", "gnmic"] = "snmp_exporter"
+
     notification_webhook_url: str = ""
     adapter_timeout_seconds: float = 10.0
     adapter_max_retries: int = 3
@@ -119,7 +256,18 @@ class Settings(BaseSettings):
     git_base_url: str = ""
     git_repo: str = ""
     git_token_secret: str = "git/token"  # Vault KV path, never the token itself
-    git_default_branch: str = "main"
+    git_default_branch: str = "main"  # main or master: holds the approved running config
+    # Where device configs live in Git. per_device: repo netops/config-<device>,
+    # file backups/running-config.txt. monorepo: one repo (git_config_repo, or
+    # git_repo when empty) with one file per device at git_config_path.
+    git_layout: Literal["per_device", "monorepo"] = "per_device"
+    git_config_repo: str = ""
+    git_config_path: str = "{device}/config"
+    # Change rollback source. git: restore each device's config from the
+    # main/master commit recorded at pre-check (the config before this change),
+    # falling back to the AWX pre-change backup only if Git cannot serve it.
+    # backup: always restore the AWX pre-change backup.
+    rollback_source: Literal["git", "backup"] = "git"
 
     # IAM / JWT (M9)
     jwt_secret: str = (
@@ -162,6 +310,30 @@ class Settings(BaseSettings):
 
 def get_settings() -> Settings:
     return Settings()
+
+
+def flow_security_warnings(settings: Settings) -> list[str]:
+    """Flow settings that are allowed but weaker than recommended."""
+    out: list[str] = []
+    if (
+        settings.flow_scripts_enabled
+        and settings.flow_script_runner == "local"
+        and not settings.flow_script_require_isolation
+    ):
+        out.append(
+            "flow scripts run on the worker without required isolation: set "
+            "VIREONET_FLOW_SCRIPT_RUNNER=sidecar (recommended) or VIREONET_FLOW_SCRIPT_REQUIRE_ISOLATION=true"
+        )
+    if settings.flow_script_runner == "sidecar" and settings.flow_script_runner_secret in (
+        "",
+        "change-me-runner-secret",
+    ):
+        out.append("VIREONET_FLOW_SCRIPT_RUNNER_SECRET is empty or the example value")
+    if "*" in settings.flow_http_allowed_hosts and not settings.flow_http_block_private:
+        out.append(
+            "Call API steps may reach any host, including private addresses (VIREONET_FLOW_HTTP_ALLOWED_HOSTS)"
+        )
+    return out
 
 
 def validate_drift_settings(settings: Settings) -> list[str]:

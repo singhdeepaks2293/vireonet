@@ -17,6 +17,7 @@ TERMINAL_STATES: frozenset[ChangeState] = frozenset(
         ChangeState.CI_FAILED,
         ChangeState.PRE_CHECK_FAILED,
         ChangeState.ROLLED_BACK,
+        ChangeState.ROLLBACK_FAILED,
         ChangeState.FAILED,
     }
 )
@@ -38,14 +39,35 @@ LEGAL_TRANSITIONS: dict[ChangeState, frozenset[ChangeState]] = {
     ChangeState.APPROVED: frozenset(
         {ChangeState.PRE_CHECKED, ChangeState.REJECTED, ChangeState.FAILED}
     ),
+    # PRE_CHECKED -> REJECTED: an operator aborted after pre-check but
+    # before apply started. PRE_CHECKED -> ROLLED_BACK / ROLLBACK_FAILED:
+    # apply failed part-way (some waves applied), so the workflow rolls
+    # back before the change ever reached APPLIED.
     ChangeState.PRE_CHECKED: frozenset(
-        {ChangeState.APPLIED, ChangeState.PRE_CHECK_FAILED, ChangeState.FAILED}
+        {
+            ChangeState.APPLIED,
+            ChangeState.PRE_CHECK_FAILED,
+            ChangeState.REJECTED,
+            ChangeState.ROLLED_BACK,
+            ChangeState.ROLLBACK_FAILED,
+            ChangeState.FAILED,
+        }
     ),
     ChangeState.APPLIED: frozenset(
-        {ChangeState.POST_CHECKED, ChangeState.ROLLED_BACK, ChangeState.FAILED}
+        {
+            ChangeState.POST_CHECKED,
+            ChangeState.ROLLED_BACK,
+            ChangeState.ROLLBACK_FAILED,
+            ChangeState.FAILED,
+        }
     ),
     ChangeState.POST_CHECKED: frozenset(
-        {ChangeState.RECONCILING, ChangeState.ROLLED_BACK, ChangeState.FAILED}
+        {
+            ChangeState.RECONCILING,
+            ChangeState.ROLLED_BACK,
+            ChangeState.ROLLBACK_FAILED,
+            ChangeState.FAILED,
+        }
     ),
     # E3: a post-checked change reconciles Git/NetBox before it may close.
     # ROLLED_BACK is kept from the pre-E3 mapping so a manual rollback from
@@ -60,6 +82,7 @@ LEGAL_TRANSITIONS: dict[ChangeState, frozenset[ChangeState]] = {
     ChangeState.CI_FAILED: frozenset(),
     ChangeState.PRE_CHECK_FAILED: frozenset(),
     ChangeState.ROLLED_BACK: frozenset(),
+    ChangeState.ROLLBACK_FAILED: frozenset(),
     ChangeState.FAILED: frozenset(),
 }
 

@@ -77,12 +77,12 @@ describe("DriftDetail", () => {
     fireEvent.change(screen.getByLabelText("Reason (required)"), { target: { value: "restore baseline" } });
     fireEvent.change(screen.getByLabelText("ServiceNow reference (required)"), { target: { value: "RITM0001234" } });
     fireEvent.click(screen.getByRole("button", { name: "Roll back" }));
-    await waitFor(() => expect(screen.getByText(/restores the stored baseline config/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/restores the device's config from Git/)).toBeInTheDocument());
     // The dialog's confirm button is the second "Roll back" button.
     const buttons = screen.getAllByRole("button", { name: "Roll back" });
     fireEvent.click(buttons[buttons.length - 1]);
     await waitFor(() => expect(driftAction).toHaveBeenCalledWith(
-      "1", "rollback", { reason: "restore baseline", ticket_ref: "RITM0001234" },
+      "1", "rollback", { reason: "restore baseline", ticket_ref: "RITM0001234", target: "branch" },
     ));
   });
 });

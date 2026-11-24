@@ -108,8 +108,14 @@ class GitLabAdapter(BaseAdapter):
         return str(data.get("name", branch))
 
     async def commit_files(self, branch: str, files: dict[str, str], message: str) -> str:
+        # Commits API: "create" fails when the file exists and "update" fails when
+        # it does not, so pick per file via GET /repository/files/:path?ref=branch.
         actions = [
-            {"action": "create", "file_path": path, "content": content}
+            {
+                "action": "update" if await self._file_exists(path, branch) else "create",
+                "file_path": path,
+                "content": content,
+            }
             for path, content in files.items()
         ]
         data = await self._request(
@@ -119,6 +125,19 @@ class GitLabAdapter(BaseAdapter):
             idempotent=False,
         )
         return str(data.get("id", ""))
+
+    async def _file_exists(self, path: str, ref: str) -> bool:
+        encoded = path.replace("/", "%2F")
+        try:
+            await self._request(
+                "GET",
+                f"{self._project_path()}/repository/files/{encoded}",
+                params={"ref": ref},
+                idempotent=True,
+            )
+        except AdapterNotFound:
+            return False
+        return True
 
     @staticmethod
     def _to_mr(row: dict[str, Any]) -> GitLabMR:
@@ -183,6 +202,10 @@ class GitLabAdapter(BaseAdapter):
                         f"{self._project_path()}/jobs/{job['id']}/trace",
                         headers={"PRIVATE-TOKEN": self.token},
                     )
+                    if resp.status_code >= 400:
+                        raise _map_status(
+                            resp.status_code, self.name, "get_job_logs", resp.text[:500]
+                        )
                     return resp.text
         raise AdapterNotFound(self.name, "get_job_logs", job_name)
 

@@ -1,0 +1,214 @@
+# Per-intent pre/post check templates.
+#
+# Each change type gets the `defaults` for its phase, plus its own checks
+# (set `extends_defaults: false` on a phase to replace the defaults).
+#
+# A check is either:
+#   - a built-in, by name:  reachability, no_active_lock, interface_state,
+#     backup_taken, neighbour_baseline, config_matches_intent, no_unexpected_diff
+#   - a command check: a read-only command per platform, plus an expectation.
+#
+# Command checks
+#   command:   platform -> command. The device's platform comes from NetBox
+#              (ios, ios-xe, nxos, eos, junos, ...). `default` is the fallback.
+#   expect:    any of contains / not_contains / regex / not_regex. All
+#              conditions must hold on every device in the change. Either
+#              one expectation for all platforms, or platform -> expectation
+#              (with `default`) when vendors format the output differently.
+#   on_fail:   block (default) fails the phase; warn records it, never blocks.
+#   on_missing_platform: skip (default) or fail when no command fits a device.
+#   parse:     raw (default) tests the text; textfsm parses it first with your
+#              templates (policies/textfsm) or ntc-templates, then
+#              expect.row / expect.no_row test fields: {field: regex, ...}.
+#
+# Variables (Jinja, sandboxed, undefined names are errors):
+#   intent.<field>   the change intent (intent.vlan_id, intent.prefix, ...)
+#   device           device hostname
+#   platform         device platform from NetBox
+#   ticket           ServiceNow ticket number
+#
+# Safety: commands must be one line and start with an allowed read-only
+# prefix below. Locks and backups always happen, whatever this file says.
+#
+# Review changes to this file in a merge request. Test a draft first in the
+# UI (Check templates -> Edit and preview) or POST /checks/templates/validate.
+
+version: 1
+
+allowed_command_prefixes: ["show ", "display ", "get "]
+
+defaults:
+  pre: [reachability, no_active_lock, interface_state, backup_taken, neighbour_baseline]
+  post: [reachability, no_unexpected_diff, neighbour_baseline]
+
+change_types:
+  vlan_add:
+    description: Add a VLAN
+    pre:
+      checks:
+        - name: vlan_id_unused
+          description: The VLAN id is not already configured on the device
+          command:
+            ios: "show vlan id {{ intent.vlan_id }}"
+            ios-xe: "show vlan id {{ intent.vlan_id }}"
+            nxos: "show vlan id {{ intent.vlan_id }}"
+            eos: "show vlan {{ intent.vlan_id }}"
+            junos: "show vlans | match \"{{ intent.vlan_id }}\""
+          expect:
+            default:
+              not_regex: "^{{ intent.vlan_id }}\\s+\\S+\\s+active"
+            junos:
+              not_regex: "\\s{{ intent.vlan_id }}\\s*$"
+    post:
+      checks:
+        # NetBox may not hold the VLAN yet (VireoNet does not write playbook changes
+        # to NetBox): a mismatch is recorded as a warning; the device checks decide.
+        - {builtin: config_matches_intent, on_fail: warn}
+        - name: vlan_active
+          description: The VLAN exists, is active and has the requested name
+          command:
+            ios: "show vlan id {{ intent.vlan_id }}"
+            ios-xe: "show vlan id {{ intent.vlan_id }}"
+            nxos: "show vlan id {{ intent.vlan_id }}"
+            eos: "show vlan {{ intent.vlan_id }}"
+            junos: "show vlans {{ intent.vlan_name }}"
+          expect:
+            default:
+              regex: "{{ intent.vlan_id }}\\s+{{ intent.vlan_name }}\\s+active"
+            junos:
+              regex: "{{ intent.vlan_name }}\\s+{{ intent.vlan_id }}\\b"
+
+        - name: vlan_active_parsed
+          description: Same check on parsed fields (TextFSM / ntc-templates), Cisco and Arista
+          parse: textfsm
+          on_missing_platform: skip
+          command:
+            ios: "show vlan brief"
+            ios-xe: "show vlan brief"
+            nxos: "show vlan brief"
+            eos: "show vlan"
+          expect:
+            row:
+              vlan_id: "{{ intent.vlan_id }}"
+              vlan_name: "{{ intent.vlan_name }}"
+              status: "active"
+
+  vlan_remove:
+    description: Remove a VLAN
+    pre:
+      checks:
+        - name: vlan_has_no_active_ports
+          description: No access ports still use the VLAN (warning only)
+          on_fail: warn
+          command:
+            ios: "show vlan id {{ intent.vlan_id }}"
+            nxos: "show vlan id {{ intent.vlan_id }}"
+            eos: "show vlan {{ intent.vlan_id }}"
+            default: "show vlan id {{ intent.vlan_id }}"
+          expect:
+            not_regex: "(Gi|Te|Fa|Eth|Et)\\S*\\d"
+    post:
+      checks:
+        - {builtin: config_matches_intent, on_fail: warn}
+        - name: vlan_gone
+          command:
+            ios: "show vlan brief"
+            nxos: "show vlan brief"
+            eos: "show vlan"
+            junos: "show vlans"
+            default: "show vlan brief"
+          expect:
+            default:
+              not_regex: "^{{ intent.vlan_id }}\\s"
+            junos:
+              not_regex: "\\s{{ intent.vlan_id }}\\s*$"
+
+  static_route_add:
+    description: Add a static route
+    pre:
+      checks:
+        - name: next_hop_reachable
+          description: The next hop is in the routing table
+          command:
+            ios: "show ip route {{ intent.next_hop }}"
+            ios-xe: "show ip route {{ intent.next_hop }}"
+            nxos: "show ip route {{ intent.next_hop }} vrf {{ intent.vrf }}"
+            eos: "show ip route {{ intent.next_hop }}"
+            junos: "show route {{ intent.next_hop }}"
+          expect:
+            default:
+              not_contains: "not in table"
+            junos:
+              regex: "\\*\\["
+    post:
+      checks:
+        - name: route_installed
+          description: The prefix is installed via the requested next hop
+          command:
+            ios: "show ip route {{ intent.prefix.network_address }}"
+            ios-xe: "show ip route {{ intent.prefix.network_address }}"
+            nxos: "show ip route {{ intent.prefix }} vrf {{ intent.vrf }}"
+            eos: "show ip route {{ intent.prefix }}"
+            junos: "show route {{ intent.prefix }} exact"
+          expect:
+            contains: "{{ intent.next_hop }}"
+
+  static_route_remove:
+    description: Remove a static route
+    post:
+      checks:
+        - name: route_withdrawn
+          command:
+            ios: "show ip route static"
+            nxos: "show ip route static vrf {{ intent.vrf }}"
+            eos: "show ip route static"
+            junos: "show route protocol static"
+            default: "show ip route static"
+          expect:
+            not_contains: "{{ intent.prefix }}"
+
+  interface_set:
+    description: Change interface description / admin state / MTU
+    post:
+      checks:
+        - name: interface_description_applied
+          on_missing_platform: skip
+          command:
+            ios: "show interfaces {{ intent.interface }} description"
+            nxos: "show interface {{ intent.interface }} description"
+            eos: "show interfaces {{ intent.interface }} description"
+            junos: "show interfaces descriptions {{ intent.interface }}"
+          expect:
+            contains: "{{ intent.description or '' }}"
+
+  acl_entry_add:
+    description: Add an ACL entry
+    pre:
+      checks:
+        - name: acl_exists
+          description: The ACL is already defined on the device
+          command:
+            ios: "show ip access-lists {{ intent.acl_name }}"
+            nxos: "show ip access-lists {{ intent.acl_name }}"
+            eos: "show ip access-lists {{ intent.acl_name }}"
+            junos: "show configuration firewall filter {{ intent.acl_name }}"
+          expect:
+            contains: "{{ intent.acl_name }}"
+    post:
+      checks:
+        - name: acl_entry_present
+          command:
+            ios: "show ip access-lists {{ intent.acl_name }}"
+            nxos: "show ip access-lists {{ intent.acl_name }}"
+            eos: "show ip access-lists {{ intent.acl_name }}"
+          expect:
+            contains: "{{ intent.action }} {{ intent.protocol }}"
+
+  ztp_device:
+    description: Zero-touch provisioning (day-1 config)
+    pre:
+      extends_defaults: false
+      checks: [reachability, backup_taken, neighbour_baseline]
+    post:
+      extends_defaults: false
+      checks: [reachability]

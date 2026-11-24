@@ -112,8 +112,41 @@ async def list_devices(
     )
 
 
+async def _ztp_registrar(request: Request) -> None:
+    """A logged-in operator, or a provisioning system holding the ZTP
+    registration token. Registering starts NetBox/DHCP work and issues a
+    callback token, so it must never be anonymous."""
+    import hmac as _hmac
+
+    settings = request.app.state.settings
+    supplied = request.headers.get("X-VireoNet-ZTP-Token", "")
+    if (
+        supplied
+        and settings.ztp_registration_token
+        and _hmac.compare_digest(supplied.encode(), settings.ztp_registration_token.encode())
+    ):
+        return
+    from vireonet.api.security import get_current_user
+    from vireonet.iam.permissions import can
+
+    creds = request.headers.get("Authorization", "")
+    if not creds.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401, detail="operator login or X-VireoNet-ZTP-Token required"
+        )
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    user = await get_current_user(
+        request, HTTPAuthorizationCredentials(scheme="Bearer", credentials=creds[7:])
+    )
+    if not can(user.role, "operator"):
+        raise HTTPException(status_code=403, detail="operator role required")
+
+
 @router.post("/ztp/devices", status_code=202)
-async def register_device(payload: RegisterDeviceRequest, request: Request) -> dict[str, object]:
+async def register_device(
+    payload: RegisterDeviceRequest, request: Request, _auth: None = Depends(_ztp_registrar)
+) -> dict[str, object]:
     svc = _ztp_service(request)
     device, created = await svc.register_device(
         hostname=payload.hostname,
@@ -168,7 +201,9 @@ async def device_callback(payload: CallbackRequest, request: Request) -> dict[st
 
 
 @router.get("/ztp/devices/{serial}")
-async def get_device(serial: str, request: Request) -> dict[str, object]:
+async def get_device(
+    serial: str, request: Request, _role: str = Depends(require_role("viewer"))
+) -> dict[str, object]:
     svc = _ztp_service(request)
     device = await svc.get_by_serial(serial)
     if device is None:

@@ -88,6 +88,30 @@ class DeviceLockService:
             await session.commit()
             return True
 
+    async def renew_all(self, devices: list[str], ticket: str) -> int:
+        """Extend this ticket's locks by the TTL from now (long changes must not
+        lose their locks mid-apply). Returns how many were renewed; a lock
+        held by another ticket is never touched."""
+        now = datetime.now(UTC)
+        renewed = 0
+        async with self._sessions() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(DeviceLock).where(
+                            DeviceLock.device.in_(devices), DeviceLock.ticket_number == ticket
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for row in rows:
+                row.expires_at = now + timedelta(seconds=self.ttl_seconds)
+                renewed += 1
+            await session.commit()
+        return renewed
+
     async def release_all(self, devices: list[str], ticket: str) -> None:
         for device in devices:
             await self.release(device, ticket)

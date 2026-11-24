@@ -14,6 +14,11 @@ class SNRequest:
     requested_by: str
     sys_id: str = ""
     variables: dict[str, str] = field(default_factory=dict)
+    # Human-readable state ("Implement", "Work in Progress"); `state` is the raw value.
+    state_display: str = ""
+    # Change Request planned window (start_date / end_date, UTC values).
+    planned_start: str = ""
+    planned_end: str = ""
 
 
 @dataclass

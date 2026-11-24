@@ -58,6 +58,9 @@ services:
       VIREONET_TEMPORAL_ADDRESS: temporal:7233
       VIREONET_ADAPTER_MODE: fake
       VIREONET_LOG_LEVEL: INFO
+      VIREONET_FLOW_SCRIPT_RUNNER: ${VIREONET_FLOW_SCRIPT_RUNNER:-local}
+      VIREONET_FLOW_SCRIPT_RUNNER_SECRET: ${VIREONET_FLOW_SCRIPT_RUNNER_SECRET:-change-me-runner-secret}
+    networks: [default, scripts]
     depends_on:
       postgres: { condition: service_healthy }
       temporal: { condition: service_healthy }
@@ -69,6 +72,23 @@ services:
     # migrates; the worker just starts (it depends on postgres + temporal
     # being healthy, and the api having migrated by then).
 
+  # Runs flow Python scripts away from the worker (VIREONET_FLOW_SCRIPT_RUNNER=sidecar):
+  # no VireoNet secrets, read-only root filesystem, tmpfs /tmp, non-root,
+  # internal network only, signed requests.
+  script-runner:
+    build: .
+    user: "65534:65534"
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 1g
+    environment:
+      VIREONET_FLOW_SCRIPT_RUNNER_SECRET: ${VIREONET_FLOW_SCRIPT_RUNNER_SECRET:-change-me-runner-secret}
+    networks: [scripts]
+    command: ["python", "-m", "vireonet.flows.script_runner"]
+
   frontend:
     build:
       context: ./frontend
@@ -76,6 +96,12 @@ services:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
     ports: ["5173:80"]
     depends_on: [api]
+
+networks:
+  default: {}
+  # Worker <-> script-runner only; no route outside.
+  scripts:
+    internal: true
 
 volumes:
   postgres-data:

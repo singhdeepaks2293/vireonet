@@ -22,6 +22,8 @@ export default {
         "danger-bg": "var(--color-danger-bg)",
         info: "var(--color-info)",
         "info-bg": "var(--color-info-bg)",
+        highlight: "var(--color-highlight)",
+        "highlight-soft": "var(--color-highlight-soft)",
       },
       fontFamily: {
         sans: ["var(--font-sans)"],

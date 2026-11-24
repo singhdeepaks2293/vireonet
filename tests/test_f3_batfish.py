@@ -27,70 +27,81 @@ class _Answer:
 
 
 class _Question:
-    """Mimics a pybatfish question object.
+    """Mimics a pybatfish question object: q(**params).answer(snapshot=..., reference_snapshot=...)."""
 
-    Primary path: answer(snapshot="candidate", reference_snapshot="current").
-    With differential_only=True, answer() raises TypeError when snapshot kwargs
-    are passed, forcing the adapter's q(differential=True) fallback.
-    """
-
-    def __init__(self, rows: list[dict[str, Any]], *, differential_only: bool = False) -> None:
+    def __init__(self, name: str, rows: list[dict[str, Any]], calls: list[Any]) -> None:
+        self._name = name
         self._rows = rows
-        self._differential_only = differential_only
-        self._differential = False
+        self._calls = calls
+        self._params: dict[str, Any] = {}
 
     def __call__(self, **kwargs: Any) -> _Question:
-        self._differential = bool(kwargs.get("differential", False))
+        self._params = kwargs
         return self
 
     def answer(self, **kwargs: Any) -> _Answer:
-        if kwargs:
-            assert kwargs == {"snapshot": "candidate", "reference_snapshot": "current"}, kwargs
-            if self._differential_only:
-                raise TypeError("answer() got unexpected keyword arguments 'snapshot'")
-        elif self._differential_only and not self._differential:
-            raise TypeError("differential questions need q(differential=True)")
+        assert "snapshot" in kwargs, kwargs
+        self._calls.append((self._name, dict(self._params), dict(kwargs)))
         return _Answer(self._rows)
 
 
 class _StubSession:
     """Mimics a pybatfish Session: .q questions and init_snapshot recording names."""
 
-    def __init__(
-        self, rows_by_question: dict[str, list[dict[str, Any]]], *, differential_only: bool = False
-    ) -> None:
+    def __init__(self, rows_by_question: dict[str, list[dict[str, Any]]]) -> None:
         self.q = SimpleNamespace()
         self.snapshots: list[str] = []
-        for name, rows in rows_by_question.items():
-            setattr(self.q, name, _Question(rows, differential_only=differential_only))
+        self.paths: list[str] = []
+        self.calls: list[Any] = []
         for name in [
+            "differentialReachability",
             "reachability",
             "routes",
             "bgpSessionStatus",
             "undefinedReferences",
             "ipOwners",
+            *rows_by_question,
         ]:
-            if not hasattr(self.q, name):
-                setattr(self.q, name, _Question([], differential_only=differential_only))
+            setattr(self.q, name, _Question(name, rows_by_question.get(name, []), self.calls))
 
     def init_snapshot(self, path: str, name: str, overwrite: bool = False) -> None:
         self.snapshots.append(name)
+        self.paths.append(path)
+
+
+def _trace(disposition: str) -> SimpleNamespace:
+    return SimpleNamespace(disposition=disposition)
+
+
+def _flow(snapshot: str, reference: str, flow: str = "10.0.0.1 -> 10.0.0.2") -> dict[str, Any]:
+    """One differentialReachability row (Snapshot_* = candidate, Reference_* = current)."""
+    return {
+        "Flow": flow,
+        "Snapshot_Traces": [_trace(snapshot)],
+        "Snapshot_TraceCount": 1,
+        "Reference_Traces": [_trace(reference)],
+        "Reference_TraceCount": 1,
+    }
+
+
+LOST = _flow("DENIED_IN", "ACCEPTED")
+GAINED = _flow("ACCEPTED", "NO_ROUTE")
 
 
 def _adapter(
-    rows_by_question: dict[str, list[dict[str, Any]]], **kw: Any
+    rows_by_question: dict[str, list[dict[str, Any]]],
 ) -> tuple[BatfishAdapter, _StubSession]:
-    session = _StubSession(rows_by_question, **kw)
+    session = _StubSession(rows_by_question)
     return BatfishAdapter(AdapterConfig(name="batfish"), session=session), session
 
 
 async def test_differential_reachability_counts_lost_and_gained() -> None:
     adapter, session = _adapter(
         {
-            "reachability": [
-                {"Differential": "decreased", "Flow": "10.0.0.1 -> 10.0.0.2"},
-                {"Differential": "increased", "Flow": "10.0.0.1 -> 10.0.0.3"},
-                {"Differential": "increased", "Flow": "10.0.0.1 -> 10.0.0.4"},
+            "differentialReachability": [
+                LOST,
+                _flow("ACCEPTED", "DENIED_OUT", "10.0.0.1 -> 10.0.0.3"),
+                _flow("DELIVERED_TO_SUBNET", "NO_ROUTE", "10.0.0.1 -> 10.0.0.4"),
             ],
         }
     )
@@ -111,10 +122,15 @@ async def test_differential_reachability_counts_lost_and_gained() -> None:
     assert not result.passed
     assert any("reachability lost: 1 flow(s)" in f for f in result.failures)
     assert result.differential["changed_files"] == ["leaf-01.cfg"]
+    assert (
+        "differentialReachability",
+        {},
+        {"snapshot": "candidate", "reference_snapshot": "current"},
+    ) in session.calls
 
 
 async def test_differential_acl_impact_lists_changed_acl_lines() -> None:
-    adapter, _ = _adapter({"reachability": [{"Differential": "decreased"}]})
+    adapter, _ = _adapter({"differentialReachability": [LOST]})
     current = {
         "leaf-01.cfg": "hostname leaf-01\naccess-list 100 permit ip any any\naccess-list 100 deny ip any any\n"
     }
@@ -147,7 +163,10 @@ async def test_no_current_snapshot_falls_back_with_differential_false() -> None:
 async def test_unknown_status_counts_as_changed_not_lost() -> None:
     adapter, _ = _adapter(
         {
-            "reachability": [{"Differential": "unknown"}, {"Status": "not_applicable"}],
+            "differentialReachability": [
+                _flow("ACCEPTED", "ACCEPTED"),  # path changed, outcome same
+                {"Flow": "x", "Snapshot_Traces": [], "Reference_Traces": []},
+            ],
         }
     )
     current = {"leaf-01.cfg": "hostname leaf-01\n"}
@@ -159,15 +178,16 @@ async def test_unknown_status_counts_as_changed_not_lost() -> None:
     assert result.passed and result.failures == []
 
 
-async def test_differential_falls_back_to_differential_flag() -> None:
-    adapter, _ = _adapter(
-        {"reachability": [{"Differential": "decreased"}]},
-        differential_only=True,
+async def test_gated_checks_run_on_candidate_and_duplicates_only() -> None:
+    adapter, session = _adapter(
+        {
+            "ipOwners": [{"IP": "10.0.0.1", "Node": "leaf-01"}],
+            "bgpSessionStatus": [{"Node": "leaf-01", "Established_Status": "NOT_ESTABLISHED"}],
+        }
     )
     current = {"leaf-01.cfg": "hostname leaf-01\n"}
     candidate = {"leaf-01.cfg": "hostname leaf-01\nvlan 200\n"}
     result = await adapter.analyse_differential(current, candidate)
-    reach = result.differential["reachability"]
-    assert isinstance(reach, dict)
-    assert reach["lost"] == 1
-    assert any("reachability lost: 1 flow(s)" in f for f in result.failures)
+    assert ("ipOwners", {"duplicatesOnly": True}, {"snapshot": "candidate"}) in session.calls
+    assert any("duplicate IPs: 1" in f for f in result.failures)
+    assert any("BGP sessions down: 1" in f for f in result.failures)

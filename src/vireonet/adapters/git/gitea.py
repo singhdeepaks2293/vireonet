@@ -7,12 +7,28 @@ from vireonet.adapters.base import AdapterConfig, AdapterHealth
 from vireonet.adapters.errors import AdapterNotFound, AdapterValidationError
 from vireonet.adapters.git.base import (
     GitBaseAdapter,
+    GitCommit,
     GitCommitResult,
     GitFile,
     GitMR,
     GitPipeline,
+    PipelineStatus,
     normalise_pipeline_status,
 )
+
+
+def _run_status(run: dict[str, Any]) -> PipelineStatus:
+    """Map a Gitea Actions run: completed -> its conclusion; in-flight states ->
+    running/pending; anything else through the shared normaliser."""
+    status = str(run.get("status", "")).lower()
+    conclusion = str(run.get("conclusion", "") or "").lower()
+    if status == "completed":
+        return normalise_pipeline_status(conclusion) if conclusion else "unknown"
+    if status == "in_progress":
+        return "running"
+    if status in {"queued", "waiting", "requested", "blocked"}:
+        return "pending"
+    return normalise_pipeline_status(status or conclusion)
 
 
 class GiteaAdapter(GitBaseAdapter):
@@ -66,21 +82,35 @@ class GiteaAdapter(GitBaseAdapter):
             return GitFile(path=path, content=content, sha=str(data.get("sha", "")))
         raise AdapterNotFound(self.name, "get_file", f"file {path} not found at {ref}")
 
-    async def create_branch(self, branch: str, from_ref: str) -> str:
-        ref_data = await self._get(
-            self._url(f"/repos/{self.owner}/{self.repo}/git/refs/heads/{from_ref}"),
+    async def list_commits(self, path: str, ref: str, limit: int = 20) -> list[GitCommit]:
+        data = await self._get(
+            self._url(
+                f"/repos/{self.owner}/{self.repo}/commits?sha={ref}&path={path}&limit={limit}"
+            ),
             headers=self._headers(),
         )
-        # UNCERTAIN: Gitea's git refs endpoint returns {object: {sha}} like GitHub
-        # in recent versions; older Gitea returns a list. Handle both.
-        sha = (
-            str(ref_data["object"]["sha"])
-            if isinstance(ref_data, dict)
-            else str(ref_data[0]["object"]["sha"])
-        )
+        return [
+            GitCommit(
+                sha=str(c.get("sha", "")),
+                message=str((c.get("commit") or {}).get("message", "")),
+                author=str(((c.get("commit") or {}).get("author") or {}).get("name", "")),
+                date=str(((c.get("commit") or {}).get("author") or {}).get("date", "")),
+            )
+            for c in (data or [])[:limit]
+        ]
+
+    async def create_branch(self, branch: str, from_ref: str) -> str:
+        # Gitea has no POST /git/refs; branches are created via
+        # POST /repos/{owner}/{repo}/branches (docs.gitea.com/api/1.24).
+        # old_ref_name (>=1.21) accepts a branch, tag or commit; old_branch_name is
+        # sent too for older servers. 409 (already exists) surfaces as AdapterConflict.
         await self._post(
-            self._url(f"/repos/{self.owner}/{self.repo}/git/refs"),
-            json={"ref": f"refs/heads/{branch}", "sha": sha},
+            self._url(f"/repos/{self.owner}/{self.repo}/branches"),
+            json={
+                "new_branch_name": branch,
+                "old_ref_name": from_ref,
+                "old_branch_name": from_ref,
+            },
             headers=self._headers(),
         )
         return branch
@@ -137,6 +167,13 @@ class GiteaAdapter(GitBaseAdapter):
         data = await self._get(
             self._url(f"/repos/{self.owner}/{self.repo}/pulls/{mr_id}"), headers=self._headers()
         )
+        return self._to_mr(data)
+
+    @staticmethod
+    def _to_mr(data: dict[str, Any]) -> GitMR:
+        state = str(data["state"])
+        if state == "closed" and data.get("merged"):
+            state = "merged"
         return GitMR(
             id=int(data["number"]),
             iid=int(data["number"]),
@@ -144,27 +181,34 @@ class GiteaAdapter(GitBaseAdapter):
             source_branch=str(data["head"]["label"].split(":")[-1]),
             target_branch=str(data["base"]["label"].split(":")[-1]),
             url=str(data["html_url"]),
-            state=str(data["state"]),
+            state=state,
         )
 
     async def get_pipeline(self, mr_id: int) -> GitPipeline:
-        # Gitea Actions runs: GET /repos/{owner}/{repo}/actions/runs?event=pull_request
-        # UNCERTAIN: the runs list is not filtered by PR number in the API; we take
-        # the most recent run for the PR head branch and map its status.
-        pr = await self.get_mr(mr_id)
-        data = await self._get(
-            self._url(f"/repos/{self.owner}/{self.repo}/actions/runs"), headers=self._headers()
+        # Gitea Actions: GET /repos/{owner}/{repo}/actions/runs?head_sha=<PR head sha>.
+        # A 404 (Actions disabled / older Gitea) means "no pipeline info" -> unknown.
+        pr_data = await self._get(
+            self._url(f"/repos/{self.owner}/{self.repo}/pulls/{mr_id}"), headers=self._headers()
         )
+        pr = self._to_mr(pr_data)
+        head_sha = str((pr_data.get("head") or {}).get("sha", "") or "")
+        path = f"/repos/{self.owner}/{self.repo}/actions/runs"
+        if head_sha:
+            path += f"?head_sha={head_sha}"
+        try:
+            data = await self._get(self._url(path), headers=self._headers())
+        except AdapterNotFound:
+            data = {}
         runs = data.get("workflow_runs", []) if isinstance(data, dict) else []
+        if head_sha:
+            # Defensive: older servers may ignore the head_sha filter.
+            runs = [r for r in runs if str(r.get("head_sha", head_sha)) == head_sha]
         if not runs:
             return GitPipeline(id=str(mr_id), status="unknown", url=pr.url, ref=pr.source_branch)
         latest = runs[0]
-        status = normalise_pipeline_status(
-            str(latest.get("status", "")) or str(latest.get("conclusion", ""))
-        )
         return GitPipeline(
             id=str(latest.get("id", mr_id)),
-            status=status,
+            status=_run_status(latest),
             url=str(latest.get("html_url", pr.url)),
             ref=pr.source_branch,
         )

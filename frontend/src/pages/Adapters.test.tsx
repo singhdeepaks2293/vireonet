@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import Adapters from "./Adapters";
+import { AuthProvider } from "../lib/auth";
 
 vi.mock("../lib/api", async (orig) => {
   const actual = await orig() as Record<string, unknown>;
@@ -20,7 +21,7 @@ vi.mock("../lib/api", async (orig) => {
 
 function renderPage() {
   const qc = new QueryClient();
-  return render(<QueryClientProvider client={qc}><MemoryRouter initialEntries={["/adapters"]}><Adapters /></MemoryRouter></QueryClientProvider>);
+  return render(<QueryClientProvider client={qc}><AuthProvider><MemoryRouter initialEntries={["/adapters"]}><Adapters /></MemoryRouter></AuthProvider></QueryClientProvider>);
 }
 
 describe("Adapters", () => {
@@ -31,9 +32,9 @@ describe("Adapters", () => {
     expect(screen.getByText("fake")).toBeInTheDocument();
     expect(screen.getByText("https://servicenow.example.com")).toBeInTheDocument();
     expect(screen.getByText("read_ticket, add_work_note")).toBeInTheDocument();
-    expect(screen.getByText("2 adapters configured. Endpoint shows scheme, host and port only.")).toBeInTheDocument();
-    expect(screen.getByText(/Read-only. Adapter settings come from config and environment/)).toBeInTheDocument();
-    expect(screen.getByText(/No secrets are shown on this page/)).toBeInTheDocument();
+    expect(screen.getByText(/2 enabled of 2\./)).toBeInTheDocument();
+    expect(screen.getByText(/Every adapter: core systems, ITSM tools/)).toBeInTheDocument();
+    expect(screen.getByText(/No secrets are shown/)).toBeInTheDocument();
     expect(document.querySelector('input[type="password"]')).toBeNull();
     expect(screen.queryByText(/minioadmin|secret_key/i)).toBeNull();
   });

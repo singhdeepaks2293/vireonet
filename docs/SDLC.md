@@ -35,6 +35,17 @@ maps to the module that implements it and the test file that proves it.
 | D4 | Drift resolution: rollback through a normal change (`config_restore`, engine steps + auto-rollback, confirm by re-collect), merge via Git branch + MR (per-device vars override, shared templates refused, MR-merged webhook/endpoint, baseline update on merge), time-boxed exceptions (`is_excepted`, expiry job), emergency accept with retrospective deadline, ServiceNow work notes (no incident-creation method exists — logged, not invented), self-approval block, device locks, audit | `src/vireonet/drift/resolve.py`, `src/vireonet/api/drift.py`, `src/vireonet/api/webhooks.py`, `src/vireonet/services/changes.py` (`create_config_restore`, `transition_change`) | `tests/test_d4_resolution.py` |
 | D5 | Drift API + UI: list (filters device/kind/severity/status/site, pagination), detail (record + decisions + audit), summary (counts, last scan per site, never-scanned best-effort), ignore-rules (admin, replace whole set), Drift list/detail/Exceptions pages, scan summary on System health; OpenAPI client NOT regenerated (`npm run generate:api` corrupts `api-types.ts` — drift types added by hand) | `src/vireonet/api/drift.py`, `frontend/src/api/drift.ts`, `frontend/src/lib/drift.ts`, `frontend/src/lib/api-types.ts`, `frontend/src/pages/DriftList.tsx`, `DriftDetail.tsx`, `Exceptions.tsx`, `SystemHealth.tsx`, `frontend/src/App.tsx`, `frontend/src/components/layout/Nav.tsx` | `tests/test_d5_drift_api.py`, `frontend/src/pages/DriftList.test.tsx`, `DriftDetail.test.tsx`, `SystemHealth.test.tsx`, `frontend/tests/e2e/drift.spec.ts` (written, not run — no system Chromium in sandbox) |
 | D6 | Drift hardening/docs/lab: drift settings + startup validation (real mode refuses, fake warns), 500-device scale test under the concurrency limit, no lock starvation for a mid-scan change, `docs/DRIFT.md`, lab Flow C in `scripts/lab_e2e.py` (backend via `VIREONET_LAB_BACKEND` / `--backend`, drift rollback/merge/exception stages), `docs/LAB.md`, `README.md`, `docs/SDLC.md`, `docs/USER_MANUAL.md` | `src/vireonet/config.py` (`validate_drift_settings`), `src/vireonet/main.py`, `scripts/lab_e2e.py`, `docs/DRIFT.md`, `docs/LAB.md` | `tests/test_d6_scale.py` |
+| S1 | Hardening: health/ZTP/metrics auth, webhook HMAC needs a secret, login lockout, lock renewal per wave, per-wave health gate, policy window re-check before apply, drift schedules created, in-app Help, shared demo ITSM state | `api/security.py`, `api/ztp.py`, `api/auth.py`, `safety.py`, `temporal/activities.py`, `temporal/workflow.py`, `drift/schedules.py`, `api/help.py`, `itsm/fake.py` | `tests/test_stage1_hardening.py`, `tests/test_itsm.py`, `frontend/src/pages/Help.test.tsx` |
+| W1 | Flow model: stored flows with versions, publish (approver) / enable, export / import, typed inputs, variables, outputs; validation against the action catalog | `flows/catalog.py`, `flows/schema.py`, `flows/store.py`, `models.py` (Flow, FlowVersion, FlowRun), `alembic/versions/0011_flows.py` | `tests/test_flows_engine.py`, `tests/test_flows_triggers.py`, `tests/test_flows_api.py` |
+| W2 | Interpreter: variables, if/elif/else, switch, for-each (concurrency), repeat, while (max), try/catch/finally, parallel, break/continue, stop/fail, run-if, run-after, retries with backoff, continue-on-error, step caps; sandboxed Jinja with typed values and secret markers | `flows/engine.py`, `flows/expr.py` | `tests/test_flows_engine.py` |
+| W3 | Durable execution in Temporal: activities for every action, timers, approvals by signal, cancel, child ChangeWorkflow for config push, sub-flows, schedule workflow; action failures fail the step | `flows/workflow.py`, `flows/activities.py`, `worker.py` | `tests/test_flows_workflow.py` (real Temporal in Docker) |
+| W4 | Triggers: manual, ITSM (any provider, regex captures, changed from→to), flow webhook (token), schedule (cron/interval), Kafka (optional, at-least-once + dedup), VireoNet events (change.*, drift.detected), adapter sources (NetBox, Zabbix, Prometheus, LibreNMS, PRTG, SolarWinds, Git, AWX); dedup keys | `flows/triggers.py`, `flows/sources.py`, `flows/dispatch.py`, `flows/kafka.py`, `api/flows.py`, `api/excel_push.py` | `tests/test_flows_triggers.py`, `tests/test_flows_api.py` |
+| W5 | Secure API and Python steps: host allow/deny, DNS-rebinding guard, no redirects, secrets only at call time; scripts admin-only, AST allow-list, restricted builtins, rlimits, empty env, nobody + net namespace when root, isolation report/require, signed sidecar script-runner | `flows/activities.py`, `flows/sandbox.py`, `flows/script_runner.py`, `docker-compose.yml` | `tests/test_flows_sandbox.py`, `tests/test_flows_triggers.py` |
+| W6 | Flow builder UI: Visual (drag-and-drop, palette, nested blocks) ⇄ YAML toggle, condition builder, dynamic content, trigger test with sample data, simulation test run, runs with approvals/cancel, versions, templates, import/export | `frontend/src/pages/Flows.tsx`, `FlowEditor.tsx`, `FlowRun.tsx`, `components/flows/*`, `api/flows.ts` | `frontend/src/pages/Flows.test.tsx`, `frontend/src/api/flows.test.ts` |
+| C1 | Vendor controllers behind one interface (devices, images, distribute, activate, upgrade, jobs, raw API): Catalyst Center, CloudVision, Mist, Apstra, FortiManager, Panorama, Nokia NSP, ExtremeCloud IQ, Meraki, Aruba Central; fakes backed by the simulated network; flow actions with auto controller selection and durable job waits; OS rollback = activate the previous version; read-only Controllers page | `controllers/*`, `flows/activities.py`, `flows/engine.py`, `flows/examples.py`, `api/controllers.py`, `frontend/src/pages/Controllers.tsx` | `tests/test_controllers.py`, `tests/test_flows_workflow.py`, `tests/test_flows_api.py`, `frontend/src/pages/Controllers.test.tsx` |
+| A1 | Adapters verified against official vendor docs (ITSM, NetBox, AWX, Git x4, Vault, Batfish, EVE-NG, containerlab, Kea, Teams, Zabbix, Prometheus, LibreNMS, PRTG, SolarWinds, webhook sources, 10 controllers) and fixed; log platforms (Elasticsearch, OpenSearch, Splunk, Loki, Graylog) for flows and event export; every adapter family on the Adapters tab; adapter settings editable in the UI (encrypted secrets, test connection); Gitea tab; documentation space | `adapters/*`, `itsm/*`, `telemetry/*`, `flows/sources.py`, `controllers/vendors.py`, `logsearch/`, `adapter_config.py`, `api/adapters.py`, `api/adapter_config.py`, `api/gitea_view.py`, `api/help.py`, `frontend/src/pages/{Adapters,Gitea,Help}.tsx` | `tests/test_*_docs.py`, `tests/test_logsearch.py`, `tests/test_adapters_tab.py`, `tests/test_adapter_config.py`, UI tests |
+| N1 | Intelligence tab (renamed from Machine learning) with neural networks: DeepLog-style log sequences (held-out baseline), change-based traffic forecast with time-to-saturation, change-risk MLP with permutation importance, simplified-graph-convolution root cause on the topology, TF-IDF+MLP ticket classifier with device extraction; flow actions Predict change risk / Classify ticket text | `ml/neural.py`, `api/ml.py`, `flows/catalog.py`, `flows/activities.py`, `frontend/src/components/NeuralTabs.tsx` | `tests/test_neural.py`, `frontend/src/components/NeuralTabs.test.tsx` |
+| P1 | Pre/Post checks: saved profiles (versioned), snapshots of raw + TextFSM output, tests on parsed rows only (row_exists, no_rows, all_rows, count, field_range, no_rows_removed/added, unchanged, delta), intelligent diff (keyed rows, ignored fields, numeric tolerances, raw diff with ignore regexes); usable on changes (check_profile: pre blocks, post fails -> rollback), in flows (Run Pre/Post check profile) and by hand; shared simulated network between API and worker | `prepost/engine.py`, `prepost/service.py`, `api/prepost.py`, `temporal/activities.py`, `execution/fake_network.py`, `frontend/src/pages/PrePost.tsx` | `tests/test_prepost.py`, `frontend/src/pages/PrePost.test.tsx` |
 
 ## 2. Design
 
@@ -82,18 +93,31 @@ See `README.md` and `docs/runbook.md` for the change / rollback / ZTP runbooks.
 - **Ruff / mypy:** run `ruff check` and `mypy --strict`; record counts per
   run in the test report. Pre-existing strict-typing debt exists across the
   tree; fix behaviour first, typing second.
-- **Temporal workflow tests** (`test_temporal_workflow.py`, `test_ztp_workflow.py`)
-  need the Temporal test-server binary download; they fail offline in this
-  sandbox. Environmental, not a code failure.
+- **Temporal workflow tests** (`test_temporal_workflow.py`, `test_ztp_workflow.py`,
+  `test_flows_workflow.py`, …) need a Temporal server. In this sandbox they run in
+  Docker against the dev server (`-p real_temporal_plugin`); the time-skipping
+  test server does not start under the macOS sandbox.
 - **Bitbucket `commit_file`** posts JSON; Bitbucket needs multipart `POST /src`.
   Unverified against a real workspace.
 - **Gitea `get_pipeline`** returns the most recent run, not necessarily this PR's run.
-- **Config history** (`DeviceRepoManager.history()`) returns `[]` — the
-  `GitProvider` protocol has no list-commits API yet.
+- **Config history**: `GitProvider.list_commits` exists now; Gitea/GitLab/GitHub implement it.
 - **JWT:** role changes take up to the 8h token expiry to apply (deactivation
-  is immediate). No refresh tokens, no OIDC, no lockout, no password reset.
+  is immediate). No refresh tokens, no OIDC, no password reset. Login lockout
+  is per API process (put a shared limiter in front with several replicas).
 - **Diff** in change detail is intent lines as additions; current config is
   not stored, so there is no true current-vs-candidate diff yet.
 - **Gitea setup job store** is in-memory; an API restart loses job history.
+- **Flow scripts, local runner**: network isolation needs CAP_SYS_ADMIN, which
+  Docker does not grant by default; use the script-runner service in production.
+- **Controller adapters**: calls marked UNCERTAIN in `controllers/vendors.py`
+  are built from vendor documentation and tested against mocks only; verify on
+  a lab controller (stage: adapter verification).
+- **Mode matrix not run in this delivery**: the auto / fake / real
+  (`temporal_mode` × `adapter_mode`) end-to-end matrix was skipped on request.
+  Covered instead: every test against fakes and vendor-documented mocks, real
+  Temporal / Postgres / Kafka / Gitea in Docker, fake adapters on the live stack.
+  Real-mode runs against live vendor systems remain to be done on a lab.
+- **Concurrent for-each** gives each item a copy of the variables; changes made
+  inside items are not merged back.
 - **Frontend:** full-suite Vitest single-process run can hang at teardown in
   this sandbox (run per-file); Playwright e2e was not run in the SDLC pass.

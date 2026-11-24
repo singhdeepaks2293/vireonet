@@ -27,4 +27,8 @@ class ChangeState(StrEnum):
     CI_FAILED = "ci_failed"
     PRE_CHECK_FAILED = "pre_check_failed"
     ROLLED_BACK = "rolled_back"
+    # The rollback itself failed: devices may be half-changed and need a
+    # human. Terminal, and deliberately distinct from rolled_back so a
+    # failed restore is never reported as a successful one.
+    ROLLBACK_FAILED = "rollback_failed"
     FAILED = "failed"

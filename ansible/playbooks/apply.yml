@@ -1,48 +1,81 @@
 ---
-- name: Apply change — merge for adds, explicit removal for deletes
+# Apply a rendered change, one device per job.
+#
+# extra_vars (set by VireoNet, see temporal/activities.py _config_vars):
+#   platform         ios | ios-xe | nxos | eos | junos | exos | fortios | panos | sros | srlinux | ...
+#   intended_config  rendered config text (CLI, or set/delete lines)
+#   config_format    cli | set
+#   change_type      for logging
+#
+# Cisco, Arista, Juniper and Extreme use their vendor *_config modules.
+# Every other platform goes through ansible.netcommon.cli_config, which needs a
+# cliconf plugin for that platform in the AWX Execution Environment. If the
+# plugin is missing the task fails, the change fails, and VireoNet rolls back.
+- name: Apply rendered change
   hosts: all
   gather_facts: false
+  vars:
+    work_dir: "/tmp/vireonet/{{ ticket | default('unknown') }}"
+    cfg_file: "{{ work_dir }}/{{ inventory_hostname }}.apply.cfg"
+    module_platforms: [ios, ios-xe, nxos, eos, junos, exos]
   tasks:
-    # Add: ios_config / nxos_config merge by default (idempotent).
-    - name: Apply intended config (IOS, merge)
+    - name: Refuse an empty render
+      ansible.builtin.assert:
+        that: intended_config | default('') | trim | length > 0
+        fail_msg: "no rendered config for {{ inventory_hostname }}; refusing to apply"
+
+    - name: Write rendered config (controller)
+      ansible.builtin.copy:
+        content: "{{ intended_config }}"
+        dest: "{{ cfg_file }}"
+        mode: "0640"
+      delegate_to: localhost
+
+    - name: Apply (Cisco IOS / IOS-XE)
       cisco.ios.ios_config:
-        lines: "{{ intended_lines | default([]) }}"
-        parents: "{{ intended_parents | default([]) }}"
-        before: "{{ intended_before | default(omit) }}"
-        after: "{{ intended_after | default(omit) }}"
+        src: "{{ cfg_file }}"
         save_when: modified
-      when:
-        - ansible_network_os == 'cisco.ios.ios'
-        - change_type not in ['vlan_remove', 'acl_entry_remove', 'static_route_remove']
+      when: platform in ['ios', 'ios-xe']
       diff: true
 
-    - name: Apply intended config (NX-OS, merge)
+    - name: Apply (Cisco NX-OS)
       cisco.nxos.nxos_config:
-        lines: "{{ intended_lines | default([]) }}"
-        parents: "{{ intended_parents | default([]) }}"
+        src: "{{ cfg_file }}"
         save_when: modified
-      when:
-        - ansible_network_os == 'cisco.nxos.nxos'
-        - change_type not in ['vlan_remove', 'acl_entry_remove', 'static_route_remove']
+      when: platform == 'nxos'
       diff: true
 
-    # Delete: explicit `no` lines — never rely on merge to remove config.
-    - name: Remove config (IOS, explicit no)
-      cisco.ios.ios_config:
-        lines: "{{ removal_lines | default([]) }}"
-        parents: "{{ intended_parents | default([]) }}"
+    - name: Apply (Arista EOS)
+      arista.eos.eos_config:
+        src: "{{ cfg_file }}"
         save_when: modified
-      when:
-        - ansible_network_os == 'cisco.ios.ios'
-        - change_type in ['vlan_remove', 'acl_entry_remove', 'static_route_remove']
+      when: platform == 'eos'
       diff: true
 
-    - name: Remove config (NX-OS, explicit no)
-      cisco.nxos.nxos_config:
-        lines: "{{ removal_lines | default([]) }}"
-        parents: "{{ intended_parents | default([]) }}"
+    - name: Apply (Juniper Junos, set format, confirmed commit)
+      junipernetworks.junos.junos_config:
+        src: "{{ cfg_file }}"
+        src_format: set
+        confirm: 10
+        comment: "vireonet {{ ticket | default('') }}"
+      when: platform == 'junos'
+      diff: true
+
+    - name: Confirm Junos commit (cancels the automatic rollback)
+      junipernetworks.junos.junos_config:
+        confirm_commit: true
+      when: platform == 'junos'
+
+    - name: Apply (Extreme EXOS)
+      community.network.exos_config:
+        src: "{{ cfg_file }}"
         save_when: modified
-      when:
-        - ansible_network_os == 'cisco.nxos.nxos'
-        - change_type in ['vlan_remove', 'acl_entry_remove', 'static_route_remove']
+      when: platform == 'exos'
+      diff: true
+
+    - name: Apply (other platforms via cli_config; needs a cliconf plugin)
+      ansible.netcommon.cli_config:
+        config: "{{ intended_config }}"
+        commit: "{{ platform in ['sros', 'srlinux', 'panos'] }}"
+      when: platform not in module_platforms
       diff: true

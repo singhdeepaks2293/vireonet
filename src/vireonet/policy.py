@@ -9,6 +9,26 @@ import yaml
 
 from vireonet.intent import ChangeIntent
 
+# Lines a raw config push may never contain. Matched per line, case-insensitive.
+DEFAULT_RAW_DENY = [
+    r"^(do\s+)?reload\b",
+    r"^(do\s+)?(write|wr)\s+erase\b",
+    r"^(do\s+)?erase\b",
+    r"^(do\s+)?format\b",
+    r"^(do\s+)?delete\s+(/force\s+)?(flash|bootflash|nvram|disk)",
+    r"^(no\s+)?username\b",
+    r"^(no\s+)?enable\s+(secret|password)\b",
+    r"^crypto\s+key\s+zeroize\b",
+    r"^(no\s+)?aaa\s+",
+    r"^request\s+system\s+(reboot|halt|power-off|zeroize)\b",
+    r"^(set|delete)\s+system\s+(login|root-authentication)\b",
+    r"^execute\s+(factoryreset|reboot|shutdown|formatlogdisk)\b",
+    r"^config\s+system\s+admin\b",
+    r"^(set|delete)\s+mgt-config\s+users\b",
+    r"^admin\s+(reboot|save\s+.*\s+force)\b",
+    r"^(unconfigure\s+switch|reboot)\b",
+]
+
 
 @dataclass
 class PolicyResult:
@@ -29,6 +49,9 @@ class PolicyEngine:
     deny_delete_on_uplink: bool = True
     deny_vlan_remove_if_in_use: bool = True
     batfish_blocking: bool = False
+    # Raw config pushes (Excel): any line matching one of these (case-insensitive
+    # regex) is denied. Dangerous operations belong in a reviewed runbook.
+    raw_config_deny_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_RAW_DENY))
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> PolicyEngine:
@@ -46,11 +69,48 @@ class PolicyEngine:
             deny_delete_on_uplink=bool(data.get("deny_delete_on_uplink", True)),
             deny_vlan_remove_if_in_use=bool(data.get("deny_vlan_remove_if_in_use", True)),
             batfish_blocking=bool(data.get("batfish_blocking", False)),
+            raw_config_deny_patterns=list(data.get("raw_config_deny_patterns") or DEFAULT_RAW_DENY),
         )
 
     @classmethod
     def default(cls) -> PolicyEngine:
         return cls()
+
+    def window_denial(self, now: datetime | None = None) -> str | None:
+        """Why `now` is outside the policy change window, or None when inside
+        (or when no window is configured)."""
+        if not self.change_window_days:
+            return None
+        tz = ZoneInfo(self.change_window_tz)
+        when = (now or datetime.now(tz)).astimezone(tz)
+        if when.strftime("%a") not in self.change_window_days:
+            return f"outside change window: {when:%a} not allowed"
+        hhmm = when.strftime("%H:%M")
+        if not (self.change_window_start <= hhmm < self.change_window_end):
+            return (
+                f"outside change window: {hhmm} not in "
+                f"{self.change_window_start}-{self.change_window_end} {self.change_window_tz}"
+            )
+        return None
+
+    def _raw_config_denials(self, intent: ChangeIntent) -> list[str]:
+        return self.raw_config_denials(dict(getattr(intent, "configs", {}) or {}))
+
+    def raw_config_denials(self, configs: dict[str, str]) -> list[str]:
+        """Lines in raw device config that this policy forbids."""
+        import re
+
+        patterns = [re.compile(p, re.IGNORECASE) for p in self.raw_config_deny_patterns]
+        out: list[str] = []
+        for device, text in configs.items():
+            for n, line in enumerate(text.splitlines(), start=1):
+                for pat in patterns:
+                    if pat.search(line.strip()):
+                        out.append(
+                            f"{device} line {n}: {line.strip()!r} is not allowed in a config push"
+                        )
+                        break
+        return out
 
     def evaluate(
         self, intent: ChangeIntent, *, now: datetime | None = None, emergency: bool = False
@@ -74,6 +134,8 @@ class PolicyEngine:
                 and getattr(intent, "vlan_id", None) in self.protected_vlans
             ):
                 denials.append(f"VLAN {intent.vlan_id} is protected")
+        if intent.change_type == "config_push":
+            denials.extend(self._raw_config_denials(intent))
         if intent.change_type == "interface_set" and (
             getattr(intent, "interface", None) in self.uplink_interfaces
             and getattr(intent, "enabled", None) is False

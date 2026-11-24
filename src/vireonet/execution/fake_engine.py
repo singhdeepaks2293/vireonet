@@ -9,10 +9,13 @@ unchanged for every step, so a dry-run and its apply hash identically
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
 from typing import Any
 
 from vireonet.adapters.base import AdapterHealth
 from vireonet.adapters.errors import AdapterValidationError
+from vireonet.execution.fake_network import FakeNetwork
 from vireonet.execution.types import (
     DeclaredChange,
     StepRequest,
@@ -20,7 +23,24 @@ from vireonet.execution.types import (
     StepStatus,
 )
 
-_STEP_NAMES = ("backup", "pre_check", "dry_run", "apply", "post_check", "rollback", "collect_state")
+_STEP_NAMES = (
+    "backup",
+    "pre_check",
+    "dry_run",
+    "apply",
+    "post_check",
+    "rollback",
+    "collect_state",
+    "run_commands",
+)
+
+# Simulated device output for run_commands: (device, platform, command) -> text.
+CommandResponder = Callable[[str, str, str], str]
+
+
+def _devices(req: StepRequest) -> list[str]:
+    """Wave steps carry several devices as "leaf-01,leaf-02"."""
+    return [d for d in req.device.name.split(",") if d]
 
 
 class FakeExecutionEngine:
@@ -32,14 +52,42 @@ class FakeExecutionEngine:
         fail_steps: set[str] | None = None,
         python_ok: bool = False,
         python_declared_changes: list[DeclaredChange] | None = None,
+        command_responder: CommandResponder | None = None,
+        network: FakeNetwork | None = None,
+        state_store: Any = None,
     ) -> None:
+        # Shares the simulated devices with other processes (NetworkStateStore).
+        self.state_store = state_store
         self.fail_steps: set[str] = set(fail_steps or set())
         self.calls: list[StepRequest] = []
         self.python_ok = python_ok
         self.python_declared_changes: list[DeclaredChange] = list(python_declared_changes or [])
+        # Simulated devices: apply/backup/rollback update it, show commands
+        # read it. Without one, devices answer every command with "".
+        self.network = network
+        if command_responder is None:
+            command_responder = network.respond if network is not None else (lambda *_: "")
+        self.command_responder: CommandResponder = command_responder
+
+    async def _load(self, req: StepRequest) -> None:
+        if self.state_store is not None and self.network is not None:
+            await self.state_store.load_into(self.network, _devices(req))
+
+    async def _save(self, req: StepRequest) -> None:
+        if self.state_store is not None and self.network is not None:
+            await self.state_store.save_from(self.network, _devices(req))
 
     async def backup(self, req: StepRequest) -> StepResult:
-        return self._result(req.model_copy(update={"step": "backup"}))
+        await self._load(req)
+        result = self._result(req.model_copy(update={"step": "backup"}))
+        if self.network is not None and result.ok:
+            for device in _devices(req):
+                self.network.snapshot(device, req.ticket_number)
+            running = "\n".join(self.network.running_config(d) for d in _devices(req))
+            # Same markers as ansible/playbooks/backup.yml.
+            stdout = f"VIREONET-BACKUP-BEGIN\n{running}\nVIREONET-BACKUP-END"
+            result = result.model_copy(update={"output": {**result.output, "stdout": stdout}})
+        return result
 
     async def pre_check(self, req: StepRequest) -> StepResult:
         return self._result(req.model_copy(update={"step": "pre_check"}))
@@ -48,16 +96,36 @@ class FakeExecutionEngine:
         return self._result(req.model_copy(update={"step": "dry_run", "dry_run": True}))
 
     async def apply(self, req: StepRequest) -> StepResult:
-        return self._result(req.model_copy(update={"step": "apply"}))
+        result = self._result(req.model_copy(update={"step": "apply"}))
+        if self.network is not None and result.ok and not req.dry_run and req.intent:
+            await self._load(req)
+            for device in _devices(req):
+                self.network.apply(device, req.intent)
+            await self._save(req)
+        return result
 
     async def post_check(self, req: StepRequest) -> StepResult:
         return self._result(req.model_copy(update={"step": "post_check"}))
 
     async def rollback(self, req: StepRequest) -> StepResult:
-        return self._result(req.model_copy(update={"step": "rollback"}))
+        result = self._result(req.model_copy(update={"step": "rollback"}))
+        if self.network is not None and result.ok:
+            for device in _devices(req):
+                self.network.restore(device, req.ticket_number)
+            await self._save(req)
+        return result
 
     async def collect_state(self, req: StepRequest) -> StepResult:
         return self._result(req.model_copy(update={"step": "collect_state"}))
+
+    async def run_commands(self, req: StepRequest) -> StepResult:
+        await self._load(req)
+        result = self._result(req.model_copy(update={"step": "run_commands"}))
+        commands = json.loads(req.extra_vars.get("commands", "[]"))
+        outputs = [
+            self.command_responder(req.device.name, req.device.platform, str(c)) for c in commands
+        ]
+        return result.model_copy(update={"output": {**result.output, "command_outputs": outputs}})
 
     async def health_check(self) -> AdapterHealth:
         return AdapterHealth(name="fake", status="ok", capabilities=self.capabilities())

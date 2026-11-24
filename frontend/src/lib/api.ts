@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { isTerminal } from "./tokens";
 import type {
   AdapterHealth,
   AdapterSettingResponse,
@@ -20,6 +21,11 @@ import type {
 const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
 const TOKEN = (import.meta.env.VITE_API_TOKEN as string | undefined) ?? "";
 
+/** Fired when the API rejects our token (expired, revoked, user disabled).
+ *  AuthProvider listens and signs the user out instead of leaving every
+ *  page stuck on "invalid or expired token" errors. */
+export const UNAUTHORIZED_EVENT = "vireonet:unauthorized";
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -33,6 +39,10 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = localStorage.getItem("vireonet-token") ?? TOKEN;
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}`, { ...init, headers });
+  if (res.status === 401 && path !== "/auth/login") {
+    localStorage.removeItem("vireonet-token");
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -42,6 +52,26 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(res.status, detail);
   }
   return (await res.json()) as T;
+}
+
+/** Download a binary response (with auth) and save it as `filename`. */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = localStorage.getItem("vireonet-token") ?? TOKEN;
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${BASE}${path}`, { headers });
+  if (res.status === 401) {
+    localStorage.removeItem("vireonet-token");
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  }
+  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export interface ChangeFilters {
@@ -79,8 +109,10 @@ export const api = {
   listChanges: (filters: ChangeFilters) => request<PaginatedChanges>(`/changes${buildChangeQuery(filters)}`),
   getChange: (id: string) => request<ChangeResponse>(`/changes/${id}`),
   getDetail: (id: string) => request<ChangeDetailResponse>(`/changes/${id}/detail`),
-  rollback: (id: string) =>
-    request(`/changes/${id}/signals/rollback`, { method: "POST", body: JSON.stringify({}) }),
+  rollback: (id: string, reason = "manual rollback from UI") =>
+    request(`/changes/${id}/signals/rollback`, { method: "POST", body: JSON.stringify({ reason }) }),
+  abort: (id: string, reason = "aborted from UI") =>
+    request(`/changes/${id}/signals/abort`, { method: "POST", body: JSON.stringify({ reason }) }),
   createChange: (body: unknown) => request<ChangeResponse>("/changes", { method: "POST", body: JSON.stringify(body) }),
   signalApproval: (id: string, body: { approved: boolean; reason?: string }) =>
     request(`/changes/${id}/signals/approval`, { method: "POST", body: JSON.stringify(body) }),
@@ -117,13 +149,23 @@ export const api = {
 };
 
 export function useChanges(filters: ChangeFilters) {
-  return useQuery({ queryKey: ["changes", filters], queryFn: () => api.listChanges(filters) });
+  return useQuery({ queryKey: ["changes", filters], queryFn: () => api.listChanges(filters), refetchInterval: 15000 });
 }
 export function useChange(id: string) {
   return useQuery({ queryKey: ["change", id], queryFn: () => api.getChange(id), enabled: Boolean(id) });
 }
 export function useChangeDetail(id: string) {
-  return useQuery({ queryKey: ["change-detail", id], queryFn: () => api.getDetail(id), enabled: Boolean(id) });
+  // Poll while the change is still moving so operators see waves, checks and
+  // rollbacks land without reloading. Stop once it reaches a terminal state.
+  return useQuery({
+    queryKey: ["change-detail", id],
+    queryFn: () => api.getDetail(id),
+    enabled: Boolean(id),
+    refetchInterval: (query) => {
+      const state = query.state.data?.change.state;
+      return state && isTerminal(state) ? false : 3000;
+    },
+  });
 }
 export function useZtpDevices(filters: ZtpFilters) {
   return useQuery({ queryKey: ["ztp-devices", filters], queryFn: () => api.listZtpDevices(filters) });

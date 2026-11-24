@@ -54,7 +54,27 @@ def test_failure_exits_are_terminal() -> None:
         ChangeState.CI_FAILED,
         ChangeState.PRE_CHECK_FAILED,
         ChangeState.ROLLED_BACK,
+        ChangeState.ROLLBACK_FAILED,
         ChangeState.FAILED,
     } == TERMINAL_STATES
     for s in TERMINAL_STATES:
         assert not is_legal(s, ChangeState.RECEIVED)
+
+
+@pytest.mark.parametrize(
+    "frm,to",
+    [
+        (ChangeState.PRE_CHECKED, ChangeState.REJECTED),  # operator abort before apply
+        (ChangeState.PRE_CHECKED, ChangeState.ROLLED_BACK),  # apply failed part-way
+        (ChangeState.PRE_CHECKED, ChangeState.ROLLBACK_FAILED),
+        (ChangeState.APPLIED, ChangeState.ROLLBACK_FAILED),
+        (ChangeState.POST_CHECKED, ChangeState.ROLLBACK_FAILED),
+    ],
+)
+def test_abort_and_rollback_outcomes_are_legal(frm: ChangeState, to: ChangeState) -> None:
+    assert is_legal(frm, to)
+
+
+def test_rollback_failed_is_not_rolled_back() -> None:
+    assert ChangeState.ROLLBACK_FAILED != ChangeState.ROLLED_BACK
+    assert not is_legal(ChangeState.ROLLBACK_FAILED, ChangeState.ROLLED_BACK)

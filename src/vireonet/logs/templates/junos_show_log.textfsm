@@ -1,0 +1,10 @@
+Value TIMESTAMP ([A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)
+Value HOST (\S+)
+Value PROCESS ([\w./-]+)
+Value EVENT ([A-Z][A-Z0-9_]+)
+Value MESSAGE (.*)
+
+# Junos:  Nov 23 10:15:01  leaf-04 mib2d[2211]: SNMP_TRAP_LINK_DOWN: ifIndex 512, ifAdminStatus up(1), ifOperStatus down(2), ifName et-0/0/48
+Start
+  ^${TIMESTAMP}\s+${HOST}\s+${PROCESS}(?:\[\d+\])?:\s+${EVENT}:\s+${MESSAGE} -> Record
+  ^.* -> Next

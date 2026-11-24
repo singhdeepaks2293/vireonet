@@ -36,6 +36,11 @@ async def verify_webhook(request: Request, settings: Settings) -> None:
     body = await request.body()
     sig = request.headers.get("X-VireoNet-Signature", "")
     if sig:
+        # Never sign with an empty key: anyone could forge that signature.
+        if not settings.webhook_secret:
+            raise HTTPException(
+                status_code=401, detail="HMAC signatures need VIREONET_WEBHOOK_SECRET"
+            )
         expected = hmac.new(settings.webhook_secret.encode(), body, hashlib.sha256).hexdigest()
         candidate = sig.removeprefix("sha256=")
         if hmac.compare_digest(candidate, expected):
@@ -43,7 +48,10 @@ async def verify_webhook(request: Request, settings: Settings) -> None:
         raise HTTPException(status_code=401, detail="bad webhook signature")
     auth = request.headers.get("Authorization", "")
     token = auth.removeprefix("Bearer ").strip()
-    if token and token in {settings.webhook_secret, settings.api_token}:
+    if token and any(
+        secret and hmac.compare_digest(token.encode(), secret.encode())
+        for secret in (settings.webhook_secret, settings.api_token)
+    ):
         return
     raise HTTPException(status_code=401, detail="webhook authentication required")
 

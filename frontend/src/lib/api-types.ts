@@ -183,6 +183,8 @@ export interface AdapterSettingResponse {
   retry_max_attempts?: number | null;
   rate_limit_per_second?: number | null;
   capabilities: string[];
+  category?: "core" | "itsm" | "telemetry";
+  note?: string;
 }
 export interface IamUser {
   id: string;

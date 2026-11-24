@@ -1,0 +1,355 @@
+# Config render templates, per change type and platform.
+#
+# Built-in renderers (Python, vireonet/rendering/builtin.py) already cover:
+#   ios       Cisco IOS            (NetBox slugs: ios, cisco-ios, isr-g2)
+#   ios-xe    Cisco IOS-XE / ISR   (ios-xe, iosxe, isr, cisco-isr: ISR 1000/4000)
+#   nxos      Cisco NX-OS          (nxos, nx-os, cisco-nxos)
+#   eos       Arista EOS           (eos, arista, arista-eos)
+#   junos     Juniper Junos        (junos, juniper-junos), set format
+# A template here for one of those platforms OVERRIDES the built-in for that
+# change type only. Everything else falls back to the built-in.
+#
+# This file adds vendors with no built-in renderer:
+#   fortios   Fortinet FortiGate   (fortinet, fortigate, fortios)
+#   panos     Palo Alto PAN-OS     (paloalto, palo-alto, panos, pan-os), set format
+#   sros      Nokia SR OS MD-CLI   (nokia, nokia-sros, sros, timos), flat paths
+#   srlinux   Nokia SR Linux       (nokia-srlinux, srlinux, srl), set format
+#   exos      Extreme ExtremeXOS   (extreme, exos, extreme-exos)
+# The device's platform comes from NetBox. A (change type, platform) pair with
+# no template and no built-in is REJECTED at validation, before approval.
+#
+# Template language: sandboxed Jinja, undefined variables are errors.
+#   Variables: intent.<field>, device, platform, ticket
+#   Filters:   netmask  '10.1.0.0/16' -> '10.1.0.0 255.255.0.0'
+#              wildcard '10.1.0.0/16' -> '10.1.0.0 0.0.255.255'
+#              cidr     'host 10.0.0.1' -> '10.0.0.1/32'   (any stays any)
+#              ip       address part only
+#              safe_name  object-name safe (letters, digits, - _ .), max 63
+#              quote    double-quoted CLI string, quotes escaped
+#   Guard:     {{ required(intent.next_hop, 'next_hop') }} fails the change
+#              when the field is empty, instead of rendering "None".
+# Output is split into lines; blank lines are dropped. A line containing a
+# control character (e.g. a newline smuggled in a description) is refused.
+#
+# These vendor templates follow each vendor's documented CLI, but they have
+# NOT been run against real devices by the VireoNet project. Validate each
+# one in a lab (Check templates -> Config preview, then a lab change) before
+# production, and pin the software versions you tested.
+
+version: 1
+
+templates:
+
+  # ---------------------------------------------------------------- vlan_add
+  vlan_add:
+    fortios:
+      # FortiOS VLANs are sub-interfaces of a parent port: intent.interfaces
+      # lists the parent port(s). Interface names are limited to 15 chars.
+      # Assumes VDOM "root"; change it here for multi-VDOM units.
+      config: |
+        config system interface
+        {% for parent in required(intent.interfaces, 'interfaces (the parent port)') %}
+            edit {{ ("vlan" ~ intent.vlan_id ~ ("" if loop.first else "_" ~ loop.index))|quote }}
+                set vdom "root"
+                set interface {{ parent|quote }}
+                set vlanid {{ intent.vlan_id }}
+                set alias {{ intent.vlan_name|quote }}
+            next
+        {% endfor %}
+        end
+    panos:
+      # Layer-2 sub-interface per port, grouped in a VLAN object. The parent
+      # ports must already be in layer2 mode.
+      format: set
+      config: |
+        set network vlan {{ intent.vlan_name|safe_name }}
+        {% for i in intent.interfaces %}
+        set network interface ethernet {{ i }} layer2 units {{ i }}.{{ intent.vlan_id }} tag {{ intent.vlan_id }}
+        set network vlan {{ intent.vlan_name|safe_name }} interface {{ i }}.{{ intent.vlan_id }}
+        {% endfor %}
+    srlinux:
+      # One mac-vrf per VLAN, a bridged single-tagged sub-interface per port.
+      format: set
+      config: |
+        set / network-instance vlan-{{ intent.vlan_id }} type mac-vrf
+        set / network-instance vlan-{{ intent.vlan_id }} description {{ intent.vlan_name|quote }}
+        {% for i in intent.interfaces %}
+        set / interface {{ i }} vlan-tagging true
+        set / interface {{ i }} subinterface {{ intent.vlan_id }} type bridged
+        set / interface {{ i }} subinterface {{ intent.vlan_id }} vlan encap single-tagged vlan-id {{ intent.vlan_id }}
+        set / network-instance vlan-{{ intent.vlan_id }} interface {{ i }}.{{ intent.vlan_id }}
+        {% endfor %}
+    exos:
+      config: |
+        create vlan {{ intent.vlan_name|quote }} tag {{ intent.vlan_id }}
+        {% for i in intent.interfaces %}
+        configure vlan {{ intent.vlan_name|quote }} add ports {{ i }} untagged
+        {% endfor %}
+    # sros: SR OS has no switch VLANs; L2 is a VPLS service with SAPs, which
+    # needs service ids and customers the intent does not carry. Add a
+    # site-specific template here if you need it.
+
+  # ------------------------------------------------------------- vlan_remove
+  vlan_remove:
+    fortios:
+      # Removes the sub-interface created by vlan_add above (first parent).
+      config: |
+        config system interface
+            delete {{ ("vlan" ~ intent.vlan_id)|quote }}
+        end
+    panos:
+      format: set
+      config: |
+        delete network vlan {{ required(intent.vlan_name, 'vlan_name')|safe_name }}
+    srlinux:
+      format: set
+      config: |
+        delete / network-instance vlan-{{ intent.vlan_id }}
+    exos:
+      config: |
+        delete vlan {{ (intent.vlan_name|quote) if intent.vlan_name else intent.vlan_id }}
+
+  # ----------------------------------------------------------- acl_entry_add
+  acl_entry_add:
+    fortios:
+      # FortiOS has firewall policies, not ACLs: the entry becomes a policy
+      # (any -> any interface) with address and service objects. acl_name is
+      # used as the policy name prefix.
+      config: |
+        {% set src = "all" if intent.source|lower == "any" else ("vn-" ~ intent.source|cidr)|safe_name %}
+        {% set dst = "all" if intent.destination|lower == "any" else ("vn-" ~ intent.destination|cidr)|safe_name %}
+        {% set ported = intent.destination_port and intent.protocol in ["tcp", "udp"] %}
+        config firewall address
+        {% for addr in [intent.source, intent.destination] if addr|lower != "any" %}
+            edit {{ ("vn-" ~ addr|cidr)|safe_name|quote }}
+                set subnet {{ addr|netmask }}
+            next
+        {% endfor %}
+        end
+        {% if ported %}
+        config firewall service custom
+            edit {{ ("vn-" ~ intent.protocol ~ "-" ~ intent.destination_port)|quote }}
+                set {{ intent.protocol }}-portrange {{ intent.destination_port }}
+            next
+        end
+        {% endif %}
+        config firewall policy
+            edit 0
+                set name {{ (intent.acl_name ~ "-" ~ ticket)|safe_name|truncate(35, true, "")|quote }}
+                set srcintf "any"
+                set dstintf "any"
+                set srcaddr {{ src|quote }}
+                set dstaddr {{ dst|quote }}
+                set action {{ "accept" if intent.action == "permit" else "deny" }}
+                set schedule "always"
+        {% if ported %}
+                set service {{ ("vn-" ~ intent.protocol ~ "-" ~ intent.destination_port)|quote }}
+        {% elif intent.protocol == "icmp" %}
+                set service "ALL_ICMP"
+        {% else %}
+                set service "ALL"
+        {% endif %}
+                set logtraffic all
+                set comments {{ ("vireonet " ~ ticket)|quote }}
+            next
+        end
+    panos:
+      # A security rule (zones any -> any). The rule name is derived from the
+      # entry so the same intent always maps to the same rule.
+      format: set
+      config: |
+        {% set rule = ("vn-" ~ intent.acl_name ~ "-" ~ intent.action ~ "-" ~ intent.protocol ~ "-" ~ (intent.destination|cidr) ~ "-" ~ (intent.destination_port or "any"))|safe_name %}
+        {% set ported = intent.destination_port and intent.protocol in ["tcp", "udp"] %}
+        {% if ported %}
+        set service vn-{{ intent.protocol }}-{{ intent.destination_port }} protocol {{ intent.protocol }} port {{ intent.destination_port }}
+        {% endif %}
+        set rulebase security rules {{ rule }} from any to any source {{ intent.source|cidr }} destination {{ intent.destination|cidr }}
+        set rulebase security rules {{ rule }} application {{ "icmp" if intent.protocol == "icmp" else "any" }}
+        set rulebase security rules {{ rule }} service {{ ("vn-" ~ intent.protocol ~ "-" ~ intent.destination_port) if ported else ("application-default" if intent.protocol == "icmp" else "any") }}
+        set rulebase security rules {{ rule }} action {{ "allow" if intent.action == "permit" else "deny" }}
+        set rulebase security rules {{ rule }} description {{ ("vireonet " ~ ticket ~ " acl " ~ intent.acl_name)|quote }}
+    # sros / srlinux: filter entries are numbered and the add intent carries
+    # no entry number; exos uses ACL policy files. Add site templates here.
+
+  # -------------------------------------------------------- acl_entry_remove
+  acl_entry_remove:
+    fortios:
+      # sequence is the FortiOS policy ID.
+      config: |
+        config firewall policy
+            delete {{ intent.sequence }}
+        end
+    sros:
+      config: |
+        delete /configure filter ip-filter {{ intent.acl_name|quote }} entry {{ intent.sequence }}
+    srlinux:
+      format: set
+      config: |
+        delete / acl ipv4-filter {{ intent.acl_name }} entry {{ intent.sequence }}
+
+  # -------------------------------------------------------- static_route_add
+  static_route_add:
+    fortios:
+      # A VRF maps to a VDOM. Add "set device <port>" here if your FortiOS
+      # version requires the outgoing interface for gateway routes.
+      config: |
+        {% if intent.vrf != "default" %}
+        config vdom
+            edit {{ intent.vrf|quote }}
+        {% endif %}
+        config router static
+            edit 0
+                set dst {{ intent.prefix|netmask }}
+                set gateway {{ intent.next_hop }}
+                set distance {{ intent.admin_distance }}
+                set comment {{ ("vireonet " ~ ticket)|quote }}
+            next
+        end
+        {% if intent.vrf != "default" %}
+        end
+        {% endif %}
+    panos:
+      # VRF -> virtual router. Route name is derived from the prefix so the
+      # remove template below can find it.
+      format: set
+      config: |
+        {% set vr = "default" if intent.vrf == "default" else intent.vrf %}
+        {% set name = ("vn-" ~ intent.prefix)|safe_name %}
+        set network virtual-router {{ vr }} routing-table ip static-route {{ name }} destination {{ intent.prefix }} nexthop ip-address {{ intent.next_hop }}
+        {% if intent.admin_distance != 1 %}
+        set network virtual-router {{ vr }} routing-table ip static-route {{ name }} admin-dist {{ intent.admin_distance }}
+        {% endif %}
+    sros:
+      config: |
+        {% set scope = '/configure router "Base"' if intent.vrf == "default" else "/configure service vprn " ~ (intent.vrf|quote) %}
+        {{ scope }} static-routes route {{ intent.prefix }} route-type unicast next-hop {{ intent.next_hop }} admin-state enable
+        {% if intent.admin_distance != 1 %}
+        {{ scope }} static-routes route {{ intent.prefix }} route-type unicast next-hop {{ intent.next_hop }} preference {{ intent.admin_distance }}
+        {% endif %}
+    srlinux:
+      format: set
+      config: |
+        {% set ni = intent.vrf %}
+        {% set nhg = ("vn-nh-" ~ intent.next_hop)|safe_name %}
+        set / network-instance {{ ni }} next-hop-groups group {{ nhg }} nexthop 1 ip-address {{ intent.next_hop }}
+        set / network-instance {{ ni }} static-routes route {{ intent.prefix }} next-hop-group {{ nhg }}
+        set / network-instance {{ ni }} static-routes route {{ intent.prefix }} admin-state enable
+        {% if intent.admin_distance != 1 %}
+        set / network-instance {{ ni }} static-routes route {{ intent.prefix }} preference {{ intent.admin_distance }}
+        {% endif %}
+    exos:
+      config: |
+        configure iproute add {{ intent.prefix }} {{ intent.next_hop }}{{ (" " ~ intent.admin_distance) if intent.admin_distance != 1 else "" }}{{ (" vr " ~ intent.vrf) if intent.vrf != "default" else "" }}
+
+  # ----------------------------------------------------- static_route_remove
+  static_route_remove:
+    panos:
+      format: set
+      config: |
+        delete network virtual-router {{ "default" if intent.vrf == "default" else intent.vrf }} routing-table ip static-route {{ ("vn-" ~ intent.prefix)|safe_name }}
+    sros:
+      config: |
+        {% set scope = '/configure router "Base"' if intent.vrf == "default" else "/configure service vprn " ~ (intent.vrf|quote) %}
+        delete {{ scope }} static-routes route {{ intent.prefix }} route-type unicast
+    srlinux:
+      format: set
+      config: |
+        delete / network-instance {{ intent.vrf }} static-routes route {{ intent.prefix }}
+    exos:
+      config: |
+        configure iproute delete {{ intent.prefix }} {{ required(intent.next_hop, 'next_hop') }}{{ (" vr " ~ intent.vrf) if intent.vrf != "default" else "" }}
+    # fortios: static routes are numbered entries; remove by ID needs a
+    # site template (the intent carries the prefix, not the FortiOS ID).
+
+  # ----------------------------------------------------------- interface_set
+  interface_set:
+    fortios:
+      config: |
+        config system interface
+            edit {{ intent.interface|quote }}
+        {% if intent.description is not none %}
+                set description {{ intent.description|quote }}
+        {% endif %}
+        {% if intent.enabled is not none %}
+                set status {{ "up" if intent.enabled else "down" }}
+        {% endif %}
+        {% if intent.mtu %}
+                set mtu-override enable
+                set mtu {{ intent.mtu }}
+        {% endif %}
+            next
+        end
+    panos:
+      format: set
+      config: |
+        {% if intent.description is not none %}
+        set network interface ethernet {{ intent.interface }} comment {{ intent.description|quote }}
+        {% endif %}
+        {% if intent.enabled is not none %}
+        set network interface ethernet {{ intent.interface }} link-state {{ "up" if intent.enabled else "down" }}
+        {% endif %}
+        {% if intent.mtu %}
+        set network interface ethernet {{ intent.interface }} layer3 mtu {{ intent.mtu }}
+        {% endif %}
+    sros:
+      # Physical ports, e.g. 1/1/1.
+      config: |
+        {% if intent.description is not none %}
+        /configure port {{ intent.interface }} description {{ intent.description|quote }}
+        {% endif %}
+        {% if intent.enabled is not none %}
+        /configure port {{ intent.interface }} admin-state {{ "enable" if intent.enabled else "disable" }}
+        {% endif %}
+        {% if intent.mtu %}
+        /configure port {{ intent.interface }} ethernet mtu {{ intent.mtu }}
+        {% endif %}
+    srlinux:
+      format: set
+      config: |
+        {% if intent.description is not none %}
+        set / interface {{ intent.interface }} description {{ intent.description|quote }}
+        {% endif %}
+        {% if intent.enabled is not none %}
+        set / interface {{ intent.interface }} admin-state {{ "enable" if intent.enabled else "disable" }}
+        {% endif %}
+        {% if intent.mtu %}
+        set / interface {{ intent.interface }} mtu {{ intent.mtu }}
+        {% endif %}
+    exos:
+      # EXOS has no per-port MTU: jumbo frames are a global size plus a
+      # per-port switch.
+      config: |
+        {% if intent.description is not none %}
+        configure ports {{ intent.interface }} description-string {{ intent.description|quote }}
+        {% endif %}
+        {% if intent.enabled is not none %}
+        {{ "enable" if intent.enabled else "disable" }} ports {{ intent.interface }}
+        {% endif %}
+        {% if intent.mtu and intent.mtu > 1500 %}
+        configure jumbo-frame-size {{ intent.mtu }}
+        enable jumbo-frame ports {{ intent.interface }}
+        {% elif intent.mtu %}
+        disable jumbo-frame ports {{ intent.interface }}
+        {% endif %}
+
+  # -------------------------------------------------------------- ztp_device
+  ztp_device:
+    fortios:
+      config: |
+        config system global
+            set hostname {{ device|quote }}
+        end
+    panos:
+      format: set
+      config: |
+        set deviceconfig system hostname {{ device }}
+    sros:
+      config: |
+        /configure system name {{ device|quote }}
+    srlinux:
+      format: set
+      config: |
+        set / system name host-name {{ device }}
+    exos:
+      config: |
+        configure snmp sysName {{ device|quote }}

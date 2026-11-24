@@ -331,6 +331,10 @@ class ChangeService:
             await session.refresh(change)
             return change
 
+    async def get_by_ticket(self, ticket: str) -> Change | None:
+        async with self._sessions() as session:
+            return await self._existing(session, ticket)
+
     async def get(self, change_id: str) -> Change | None:
         pk = _coerce_change_id(change_id)
         if pk is None:
@@ -457,6 +461,22 @@ class ChangeService:
                 job_type = str(intent_job_type)
             for r in rows:
                 ev = r.evidence or {}
+                # Workflow transitions store the whole activity result
+                # ({ok, failures, evidence: {...}}); read the inner evidence too.
+                raw_inner = ev.get("evidence")
+                inner: dict[str, Any] = raw_inner if isinstance(raw_inner, dict) else {}
+                if isinstance(inner.get("checks"), list):
+                    checks.extend(inner["checks"])
+                jobs = inner.get("jobs")
+                for job in jobs.values() if isinstance(jobs, dict) else []:
+                    if isinstance(job, dict) and job.get("job_id") is not None:
+                        awx_jobs.append(
+                            {
+                                "job_id": job["job_id"],
+                                "status": job.get("status", ""),
+                                "to_state": r.to_state,
+                            }
+                        )
                 if isinstance(ev.get("checks"), list):
                     checks.extend(ev["checks"])
                 if isinstance(ev.get("gate"), dict):

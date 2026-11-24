@@ -4,6 +4,7 @@ import time
 from typing import Any
 
 import hvac
+import hvac.exceptions
 
 from vireonet.adapters.base import AdapterConfig, AdapterHealth, BaseAdapter
 from vireonet.adapters.errors import AdapterAuthError, AdapterNotFound, AdapterUnavailable
@@ -25,6 +26,8 @@ class VaultAdapter(BaseAdapter):
         secret_id: str = "",
         kv_mount: str = "secret",
         bootstrap_policy: str = "bootstrap",
+        bootstrap_token_role: str = "",
+        bootstrap_no_parent: bool = False,
         client: Any | None = None,
         correlation_id: str | None = None,
     ) -> None:
@@ -34,6 +37,8 @@ class VaultAdapter(BaseAdapter):
         self.secret_id = secret_id
         self.kv_mount = kv_mount
         self.bootstrap_policy = bootstrap_policy
+        self.bootstrap_token_role = bootstrap_token_role
+        self.bootstrap_no_parent = bootstrap_no_parent
         self._client = client  # injected in tests; otherwise built lazily
         self._token_expires_at: float = 0.0
 
@@ -82,6 +87,11 @@ class VaultAdapter(BaseAdapter):
         client = await self._ensure_auth()
         try:
             resp = client.secrets.kv.v2.read_secret_version(path=path, mount_point=self.kv_mount)
+        except hvac.exceptions.InvalidPath as exc:
+            # KV v2 returns 404 (InvalidPath) for a missing or deleted secret.
+            raise AdapterNotFound(self.name, "read_secret", path) from exc
+        except hvac.exceptions.Forbidden as exc:
+            raise AdapterAuthError(self.name, "read_secret", str(exc)) from exc
         except Exception as exc:
             raise AdapterUnavailable(self.name, "read_secret", str(exc)) from exc
         if not resp or not resp.get("data"):
@@ -92,22 +102,42 @@ class VaultAdapter(BaseAdapter):
     async def renew_token(self) -> None:
         client = await self._ensure_auth()
         try:
-            client.auth.token.renew_self()
-            self._token_expires_at = time.time() + 3600
+            resp = client.auth.token.renew_self()
         except Exception as exc:
             raise AdapterAuthError(self.name, "renew_token", str(exc)) from exc
+        # The new TTL is auth.lease_duration (seconds); Vault may cap it at
+        # the token's max TTL, so never assume a fixed value.
+        auth = resp.get("auth", {}) if isinstance(resp, dict) else {}
+        lease = auth.get("lease_duration")
+        if lease is not None:
+            self._token_expires_at = time.time() + float(lease)
 
     async def issue_bootstrap_token(self, device: str) -> str:
         """Short-lived Vault token for a ZTP device (15m, bootstrap policy).
 
         The token itself is the credential; VireoNet returns it once and does
         not store it. The device presents it to the callback endpoint (M6).
+
+        By default the token is a child of the AppRole token, so it is revoked
+        when that token expires/is revoked (and its TTL is capped by it). For
+        an independent (orphan) token either set ``bootstrap_token_role`` to a
+        token role (``auth/token/create/<role>``, the role must be ``orphan``
+        and allow the bootstrap policy), or set ``bootstrap_no_parent`` — the
+        latter needs sudo on ``auth/token/create``, so it is off by default.
+        https://developer.hashicorp.com/vault/api-docs/auth/token#create-token
         """
         client = await self._ensure_auth()
+        kwargs: dict[str, Any] = {
+            "ttl": "15m",
+            "policies": [self.bootstrap_policy],
+            "meta": {"device": device},
+        }
+        if self.bootstrap_token_role:
+            kwargs["role_name"] = self.bootstrap_token_role
+        elif self.bootstrap_no_parent:
+            kwargs["no_parent"] = True
         try:
-            resp = client.auth.token.create(
-                ttl="15m", policies=[self.bootstrap_policy], meta={"device": device}
-            )
+            resp = client.auth.token.create(**kwargs)
         except Exception as exc:
             raise AdapterUnavailable(self.name, "issue_bootstrap_token", str(exc)) from exc
         token = resp.get("auth", {}).get("client_token", "") if isinstance(resp, dict) else ""

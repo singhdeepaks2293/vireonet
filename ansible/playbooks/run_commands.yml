@@ -1,0 +1,38 @@
+---
+# Run read-only show commands for VireoNet template checks.
+#
+# extra_vars:
+#   commands: JSON list of command strings, already rendered and checked by
+#             VireoNet (single line, read-only prefix). Re-checked here.
+#
+# Contract with execution/awx_engine.py: the outputs are printed as a JSON
+# list, in command order, between VIREONET-COMMANDS-BEGIN/END markers.
+# Uses ansible.netcommon.cli_command, so it works on any platform with a
+# network_cli connection plugin (ios, iosxr, nxos, eos, junos, ...).
+- name: Run read-only commands for template checks
+  hosts: all
+  gather_facts: false
+  vars:
+    command_list: "{{ commands | from_json }}"
+    allowed_prefixes: ["show ", "display ", "get "]
+  tasks:
+    - name: Refuse anything that is not a read-only command
+      ansible.builtin.assert:
+        that:
+          - item is string
+          - "'\n' not in item"
+          - allowed_prefixes | select('in', [item[:item.find(' ') + 1] | lower]) | list | length > 0
+        fail_msg: "refusing non read-only command: {{ item }}"
+      loop: "{{ command_list }}"
+
+    - name: Run commands
+      ansible.netcommon.cli_command:
+        command: "{{ item }}"
+      loop: "{{ command_list }}"
+      register: cmd_out
+      changed_when: false
+
+    - name: Print outputs between VireoNet markers
+      ansible.builtin.debug:
+        msg: "VIREONET-COMMANDS-BEGIN\n{{ cmd_out.results | map(attribute='stdout') | list | to_json }}\nVIREONET-COMMANDS-END"
+      changed_when: false

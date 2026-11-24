@@ -46,6 +46,16 @@ class GitCommitResult:
 
 
 @dataclass
+class GitCommit:
+    """One commit that touched a path, newest first in list_commits()."""
+
+    sha: str
+    message: str = ""
+    author: str = ""
+    date: str = ""
+
+
+@dataclass
 class GitFile:
     path: str
     content: str
@@ -61,6 +71,8 @@ class GitProvider(Protocol):
     async def health_check(self) -> AdapterHealth: ...
     def capabilities(self) -> list[str]: ...
     async def get_file(self, path: str, ref: str) -> GitFile: ...
+    # Commits on `ref` that touched `path`, newest first (version history).
+    async def list_commits(self, path: str, ref: str, limit: int = 20) -> list[GitCommit]: ...
     async def create_branch(self, branch: str, from_ref: str) -> str: ...
     async def commit_file(
         self, branch: str, path: str, content: str, message: str
@@ -125,6 +137,49 @@ class GitBaseAdapter(BaseAdapter):
     def _auth_headers(self) -> dict[str, str]:
         return {}
 
+    async def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        files: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        follow_redirects: bool = False,
+        idempotent: bool,
+    ) -> httpx.Response:
+        """Low-level request returning the raw httpx.Response (non-2xx mapped to
+        typed errors). Used where callers need headers (Location), form bodies
+        (Bitbucket /src) or the raw text regardless of content type."""
+
+        async def do() -> httpx.Response:
+            hdrs = {**self._auth_headers(), **(headers or {})}
+            if self.correlation_id:
+                hdrs["X-Correlation-ID"] = self.correlation_id
+            async with create_http_client(
+                self.config, correlation_id=self.correlation_id
+            ) as client:
+                try:
+                    resp = await client.request(
+                        method,
+                        path,
+                        json=json_body,
+                        data=data,
+                        files=files,
+                        headers=hdrs,
+                        follow_redirects=follow_redirects,
+                    )
+                except httpx.TimeoutException as exc:
+                    raise AdapterTimeout(self.name, method, str(exc)) from exc
+                except httpx.HTTPError as exc:
+                    raise AdapterUnavailable(self.name, method, str(exc)) from exc
+                if resp.status_code >= 400:
+                    raise _map_status(resp.status_code, self.name, method, resp.text[:500])
+                return resp
+
+        return await self.execute_with_retry(method, do, idempotent=idempotent)
+
     async def _request(
         self,
         method: str,
@@ -134,29 +189,15 @@ class GitBaseAdapter(BaseAdapter):
         headers: dict[str, str] | None = None,
         idempotent: bool,
     ) -> Any:
-        async def do() -> Any:
-            hdrs = {**self._auth_headers(), **(headers or {})}
-            if self.correlation_id:
-                hdrs["X-Correlation-ID"] = self.correlation_id
-            async with create_http_client(
-                self.config, correlation_id=self.correlation_id
-            ) as client:
-                try:
-                    resp = await client.request(method, path, json=json_body, headers=hdrs)
-                except httpx.TimeoutException as exc:
-                    raise AdapterTimeout(self.name, method, str(exc)) from exc
-                except httpx.HTTPError as exc:
-                    raise AdapterUnavailable(self.name, method, str(exc)) from exc
-                if resp.status_code >= 400:
-                    raise _map_status(resp.status_code, self.name, method, resp.text[:500])
-                if not resp.content:
-                    return {}
-                try:
-                    return resp.json()
-                except ValueError:
-                    return resp.text
-
-        return await self.execute_with_retry(method, do, idempotent=idempotent)
+        resp = await self._send(
+            method, path, json_body=json_body, headers=headers, idempotent=idempotent
+        )
+        if not resp.content:
+            return {}
+        try:
+            return resp.json()
+        except ValueError:
+            return resp.text
 
     async def _get(self, path: str, *, headers: dict[str, str] | None = None) -> Any:
         return await self._request("GET", path, headers=headers, idempotent=True)

@@ -32,6 +32,7 @@ mappings:
       post_check: post-check
       rollback: rollback
       collect_state: backup
+      run_commands: run-commands
   - change_type: ztp_device
     platform: "*"
     job_type: playbook

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useParams } from "react-router-dom";
-import { driftApi, useDriftDetail } from "../api/drift";
+import { driftApi, useConfigCommits, useDriftDetail } from "../api/drift";
 import { Button } from "../components/ui/Button";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { Input, Label } from "../components/ui/Input";
@@ -21,7 +21,8 @@ const TABS: { id: Tab; label: string }[] = [
 
 const CONFIRM_TEXT: Record<ActionKind, string> = {
   rollback:
-    "This starts a normal change that restores the stored baseline config on the device " +
+    "This starts a normal change that restores the device's config from Git (the target " +
+    "you chose: the main/master head by default, which is the approved running config) " +
     "(backup, pre-check, dry-run, apply, post-check; automatic rollback if apply or " +
     "post-check fails). The record resolves only when a re-collect confirms the running " +
     "config matches the baseline. The device is locked for the duration.",
@@ -48,8 +49,11 @@ export default function DriftDetail() {
   const [confirm, setConfirm] = useState<ActionKind | null>(null);
   const [message, setMessage] = useState("");
   const [acting, setActing] = useState(false);
+  const [target, setTarget] = useState<"branch" | "previous" | "commit">("branch");
+  const [commitSha, setCommitSha] = useState("");
 
   const record = detail.data?.record;
+  const commits = useConfigCommits(record?.device);
 
   const doAction = async (kind: ActionKind) => {
     if (!id || !record) return;
@@ -63,6 +67,9 @@ export default function DriftDetail() {
       if (kind === "exception") {
         body.owner = owner;
         if (expiry) body.expiry = new Date(expiry).toISOString();
+      }
+      if (kind === "rollback") {
+        (body as { target?: string }).target = target === "commit" ? commitSha : target;
       }
       const result = await driftApi.driftAction(id, kind, body);
       setMessage(`${kind} accepted: ${String(result.status ?? "")}`);
@@ -225,10 +232,34 @@ export default function DriftDetail() {
           <Input id="drift-expiry" type="datetime-local" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
         </div>
       </div>
+      <div className="mb-4 border border-border bg-surface rounded p-4">
+        <Label htmlFor="drift-rb-target">Roll back to (from Git)</Label>
+        <select id="drift-rb-target" className="px-2 py-1 text-sm bg-surface border border-border rounded" value={target} onChange={(e) => setTarget(e.target.value as "branch" | "previous" | "commit")}>
+          <option value="branch">Head of {commits.data?.branch ?? "main"}: the approved running config</option>
+          <option value="previous">Last commit before the head</option>
+          <option value="commit">A specific commit…</option>
+        </select>
+        {target === "commit" ? (
+          <div className="mt-2">
+            <Label htmlFor="drift-rb-commit">Commit</Label>
+            <select id="drift-rb-commit" className="px-2 py-1 text-sm bg-surface border border-border rounded mono" value={commitSha} onChange={(e) => setCommitSha(e.target.value)}>
+              <option value="">Choose a commit</option>
+              {(commits.data?.commits ?? []).map((c) => (
+                <option key={c.sha} value={c.sha}>{c.sha.slice(0, 10)} · {c.date.slice(0, 10)} · {c.message.split("\n")[0].slice(0, 60)}</option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+        {commits.isError ? (
+          <p className="text-sm text-warning mt-2">Git history is unavailable ({(commits.error as Error).message}). The default rollback falls back to the stored baseline; other targets are refused.</p>
+        ) : commits.data ? (
+          <p className="text-sm text-text-muted mt-2"><span className="mono">{commits.data.repo}</span> · <span className="mono">{commits.data.path}</span> · {commits.data.commits.length} commits on {commits.data.branch}</p>
+        ) : null}
+      </div>
       {message ? <p className="text-sm mb-2" role="status">{message}</p> : null}
       <div className="flex gap-2">
         <ConfirmDialog open={confirm === "rollback"} onOpenChange={(o) => setConfirm(o ? "rollback" : null)} title="Roll back drift" description={CONFIRM_TEXT.rollback} confirmLabel="Roll back" onConfirm={() => doAction("rollback")}>
-          <Button variant="primary" disabled={!canAct || acting}>Roll back</Button>
+          <Button variant="primary" disabled={!canAct || acting || (target === "commit" && !commitSha)}>Roll back</Button>
         </ConfirmDialog>
         <ConfirmDialog open={confirm === "merge"} onOpenChange={(o) => setConfirm(o ? "merge" : null)} title="Merge drift into Git" description={CONFIRM_TEXT.merge} confirmLabel="Merge" onConfirm={() => doAction("merge")}>
           <Button variant="secondary" disabled={!canAct || acting}>Merge</Button>

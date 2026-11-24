@@ -31,11 +31,10 @@ def _adapter() -> ServiceNowAdapter:
 async def test_servicenow_real_contract() -> None:
     # health_check: GET sc_req_item?limit=1
     # GET sequence in check_servicenow: health(1) + get_request(1) +
-    # add_work_note#1 (get_request + update_state's get_request = 2) +
-    # add_work_note#2 (dedup, no HTTP) + missing get_request(1) = 5 GETs.
+    # add_work_note#1 (one get_request, then a PATCH of work_notes only) +
+    # add_work_note#2 (dedup, no HTTP) + missing get_request(1) = 4 GETs.
     respx.get(url__regex=r".*sc_req_item.*").mock(
         side_effect=[
-            Response(200, json={"result": [ITEM]}),
             Response(200, json={"result": [ITEM]}),
             Response(200, json={"result": [ITEM]}),
             Response(200, json={"result": [ITEM]}),
@@ -45,7 +44,7 @@ async def test_servicenow_real_contract() -> None:
     respx.get(url__regex=r".*sc_item_option_mtom.*").mock(
         return_value=Response(200, json={"result": []})
     )
-    # PATCH update_state (called by add_work_note via update_state)
+    # PATCH of work_notes by add_work_note (the state is not re-written)
     respx.patch(url__regex=r".*sc_req_item/abc123.*").mock(
         return_value=Response(200, json={"result": ITEM})
     )
@@ -86,3 +85,34 @@ async def test_servicenow_oauth_token_fetched_once() -> None:
     req = await a.get_request("RITM0001234")
     assert req.ticket == "RITM0001234"
     assert a._token == "tok-1"
+
+
+@respx.mock
+async def test_change_requests_use_change_request_table_and_display_state() -> None:
+    from vireonet.itsm.servicenow import ServiceNowItsm
+
+    chg = {
+        "number": {"value": "CHG0030001", "display_value": "CHG0030001"},
+        "state": {"value": "-1", "display_value": "Implement"},
+        "short_description": {"value": "Push", "display_value": "Push"},
+        "sys_id": {"value": "chg1", "display_value": "chg1"},
+        "opened_by": {"value": "u1", "display_value": "Carol"},
+    }
+    route = respx.get(url__regex=r".*/table/change_request\?.*").mock(
+        return_value=Response(200, json={"result": [chg]})
+    )
+    respx.get(url__regex=r".*sc_item_option_mtom.*").mock(
+        return_value=Response(200, json={"result": []})
+    )
+    patch = respx.patch(url__regex=r".*/table/change_request/chg1").mock(
+        return_value=Response(200, json={"result": {}})
+    )
+    t = await ServiceNowItsm(_adapter()).get_ticket("CHG0030001")
+    assert (t.status, t.fields["state_value"]) == ("Implement", "-1")
+    assert "sysparm_display_value=all" in str(route.calls[0].request.url)
+    await _adapter().add_work_note("CHG0030001", "hello", "k1")
+    import json as _json
+
+    assert _json.loads(patch.calls[0].request.content) == {"work_notes": "hello"}
+    await _adapter().close("CHG0030001", "done")
+    assert _json.loads(patch.calls[1].request.content)["close_code"] == "successful"

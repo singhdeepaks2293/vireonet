@@ -1,24 +1,66 @@
 ---
-- name: Dry-run diff — check mode, diff, no changes
+# Dry-run: check mode + diff, never applies (check_mode is forced per task).
+# Same extra_vars as apply.yml. Platforms without a vendor module get a
+# render-only dry-run: the config is printed, not validated on the device.
+- name: Dry-run rendered change
   hosts: all
   gather_facts: false
-  # check_mode + diff are set on the job template (see awx/job_templates.yaml)
-  # and honoured here by every config task. This playbook never applies.
+  vars:
+    work_dir: "/tmp/vireonet/{{ ticket | default('unknown') }}"
+    cfg_file: "{{ work_dir }}/{{ inventory_hostname }}.dryrun.cfg"
+    module_platforms: [ios, ios-xe, nxos, eos, junos, exos]
   tasks:
-    - name: Render intended config (IOS, check mode)
+    - name: Refuse an empty render
+      ansible.builtin.assert:
+        that: intended_config | default('') | trim | length > 0
+        fail_msg: "no rendered config for {{ inventory_hostname }}"
+
+    - name: Write rendered config (controller)
+      ansible.builtin.copy:
+        content: "{{ intended_config }}"
+        dest: "{{ cfg_file }}"
+        mode: "0640"
+      delegate_to: localhost
+      check_mode: false
+
+    - name: Check mode (Cisco IOS / IOS-XE)
       cisco.ios.ios_config:
-        lines: "{{ intended_lines | default([]) }}"
-        parents: "{{ intended_parents | default([]) }}"
-        before: "{{ intended_before | default(omit) }}"
-        after: "{{ intended_after | default(omit) }}"
-      when: ansible_network_os == 'cisco.ios.ios'
+        src: "{{ cfg_file }}"
+      when: platform in ['ios', 'ios-xe']
       check_mode: true
       diff: true
 
-    - name: Render intended config (NX-OS, check mode)
+    - name: Check mode (Cisco NX-OS)
       cisco.nxos.nxos_config:
-        lines: "{{ intended_lines | default([]) }}"
-        parents: "{{ intended_parents | default([]) }}"
-      when: ansible_network_os == 'cisco.nxos.nxos'
+        src: "{{ cfg_file }}"
+      when: platform == 'nxos'
       check_mode: true
       diff: true
+
+    - name: Check mode (Arista EOS)
+      arista.eos.eos_config:
+        src: "{{ cfg_file }}"
+      when: platform == 'eos'
+      check_mode: true
+      diff: true
+
+    - name: Commit check (Juniper Junos)
+      junipernetworks.junos.junos_config:
+        src: "{{ cfg_file }}"
+        src_format: set
+        check_commit: true
+      when: platform == 'junos'
+      check_mode: true
+      diff: true
+
+    - name: Check mode (Extreme EXOS)
+      community.network.exos_config:
+        src: "{{ cfg_file }}"
+      when: platform == 'exos'
+      check_mode: true
+      diff: true
+
+    - name: Render-only dry-run (no device-side validation for this platform)
+      ansible.builtin.debug:
+        msg: "DRY-RUN (render only) {{ platform }} {{ inventory_hostname }}:\n{{ intended_config }}"
+      when: platform not in module_platforms

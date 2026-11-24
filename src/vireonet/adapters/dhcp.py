@@ -137,11 +137,18 @@ class DhcpAdapter(BaseAdapter):
                 if r.mac_address:
                     entry["hw-address"] = r.mac_address
                 hosts.append(entry)
+            # Reservations at Dhcp4 level are GLOBAL reservations; Kea only
+            # consults them with "reservations-global": true (default false).
+            # Subnet-level lookups stay on (reservations-in-subnet defaults true).
+            # The lease still needs a subnet4 covering the IP — that lives in
+            # the deployed base config (subnet4 is preserved on edits).
+            # https://kea.readthedocs.io/en/latest/arm/dhcp4-srv.html
             return json.dumps(
                 {
                     "Dhcp4": {
                         "valid-lifetime": 3600,
                         "option-data": [{"name": "tftp-server-name", "data": self.tftp_server}],
+                        "reservations-global": True,
                         "reservations": hosts,
                     }
                 },
@@ -289,7 +296,9 @@ class DhcpAdapter(BaseAdapter):
             ]
             if len(kept) == len(reservations):
                 return config_text
+            # Edit in place: everything else (subnet4, option-data, ...) is kept.
             dhcp4["reservations"] = kept
+            dhcp4["reservations-global"] = True
             return json.dumps(data, indent=2)
         # ISC: drop the `host <name> { ... }` block, tracking brace depth.
         lines = config_text.splitlines(keepends=True)

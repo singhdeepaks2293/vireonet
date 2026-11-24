@@ -34,13 +34,46 @@ def _map_status(status: int, adapter: str, operation: str, body: str = "") -> Ex
     return AdapterUnavailable(adapter, operation, f"unexpected status {status}")
 
 
+# EVE-NG node status codes (GET /api/labs/{lab}.unl/nodes -> data.<id>.status).
+_NODE_STATUS = {0: "stopped", 1: "starting", 2: "running", 3: "running"}
+
+
+def lab_path(lab_id: str, folder: str = "/") -> str:
+    """Normalise a lab id to ``/<folder>/<name>.unl`` (no URL encoding)."""
+    raw = lab_id.strip()
+    if not raw.startswith("/"):
+        raw = folder.rstrip("/") + "/" + raw
+    if not raw.endswith(".unl"):
+        raw += ".unl"
+    return "/" + raw.lstrip("/")
+
+
+def _lab_url(lab_id: str) -> str:
+    """REST path of a lab: /api/labs/<folder>/<name>.unl, slashes kept literal."""
+    return "/api/labs" + quote(lab_path(lab_id), safe="/")
+
+
+def _node_state(node: dict[str, Any]) -> str:
+    try:
+        return _NODE_STATUS.get(int(node.get("status", 0)), "starting")
+    except (TypeError, ValueError):
+        return str(node.get("status", ""))
+
+
 class EveNgAdapter(BaseAdapter):
     """Real EVE-NG adapter. Cookie auth via /api/auth/login. Labs are always
     wiped in a finally by the caller (see scripts/eveng_smoke.py).
 
     Also implements the LabAdapter protocol (E4): deploy = start_lab +
     load_topology, wait_ready = wait_for_nodes, destroy = stop_lab +
-    wipe_lab, exec = telnet to the node console. The old method names are
+    wipe_lab, exec = telnet to the node console.
+
+    REST shapes (EVE-NG API): a lab is addressed as
+    ``/api/labs/<folder>/<name>.unl`` (literal slashes); its nodes via
+    ``GET /api/labs/<lab>.unl/nodes`` (``data`` keyed by node id, each with
+    ``name``, ``status`` and console ``url`` = ``telnet://host:port``);
+    all nodes start/stop with ``GET .../nodes/start`` / ``GET .../nodes/stop``.
+    Lab ids returned here are ``/<folder>/<name>.unl``. The old method names are
     kept as the underlying implementation, so the pre-E4 EVE-NG contract
     (and its tests) is unchanged.
     """
@@ -51,11 +84,13 @@ class EveNgAdapter(BaseAdapter):
         *,
         username: str = "",
         password: str = "",
+        folder: str = "/",
         correlation_id: str | None = None,
     ) -> None:
         super().__init__(config, correlation_id=correlation_id)
         self.username = username
         self.password = password
+        self.folder = "/" + folder.strip("/") if folder.strip("/") else "/"
         self._cookies: dict[str, str] = {}
 
     def capabilities(self) -> list[str]:
@@ -113,16 +148,19 @@ class EveNgAdapter(BaseAdapter):
         return await self.execute_with_retry(method, do, idempotent=idempotent)
 
     async def start_lab(self, name: str, topology: str) -> EveLab:
-        # topology is a .unl file path or inline topology name. EVE-NG creates
-        # a lab, then nodes are added from the topology file via the UI/API.
-        # This adapter creates the lab and returns it; load_topology adds nodes.
-        data = await self._request(
+        """Create the lab in ``self.folder`` and start its nodes.
+
+        POST /api/labs answers only a status message (no lab path), so the
+        lab id is built from folder + name, never read from the response.
+        """
+        await self._request(
             "POST",
             "/api/labs",
-            json_body={"path": "/", "name": name, "version": "1"},
+            json_body={"path": self.folder, "name": name, "version": "1"},
             idempotent=False,
         )
-        lab_id = str(data.get("data", {}).get("path", f"/{name}"))
+        lab_id = lab_path(name, self.folder)
+        await self.start_nodes(lab_id)
         return EveLab(id=lab_id, name=name, status="starting", nodes=[])
 
     async def load_topology(self, lab_id: str, topology_path: str) -> EveLab:
@@ -135,24 +173,40 @@ class EveNgAdapter(BaseAdapter):
         lab.nodes = [topology_path]
         return lab
 
+    async def list_nodes(self, lab_id: str) -> list[dict[str, Any]]:
+        """GET /api/labs/<lab>.unl/nodes -> node dicts (data keyed by node id)."""
+        path = lab_path(lab_id, self.folder)
+        data = await self._request("GET", f"{_lab_url(path)}/nodes", idempotent=True)
+        nodes = data.get("data", {}) if isinstance(data, dict) else {}
+        # PHP serialises an empty node map as [].
+        items = list(nodes.items()) if isinstance(nodes, dict) else list(enumerate(nodes or []))
+        return [{"id": n.get("id", k), **n} for k, n in items if isinstance(n, dict)]
+
     async def get_lab(self, lab_id: str) -> EveLab:
-        encoded = quote(lab_id, safe="")
-        data = await self._request("GET", f"/api/labs/{encoded}", idempotent=True)
+        path = lab_path(lab_id, self.folder)
+        data = await self._request("GET", _lab_url(path), idempotent=True)
         info = data.get("data", data) if isinstance(data, dict) else {}
-        nodes = info.get("nodes", {}) if isinstance(info, dict) else {}
-        node_names = list(nodes.keys()) if isinstance(nodes, dict) else []
+        info = info if isinstance(info, dict) else {}
+        nodes = await self.list_nodes(path)
+        states = [_node_state(n) for n in nodes]
+        if states and all(st == "running" for st in states):
+            status = "running"
+        elif states and all(st == "stopped" for st in states):
+            status = "stopped"
+        else:
+            status = "starting" if states else "empty"
         return EveLab(
-            id=lab_id,
-            name=str(info.get("name", lab_id)),
-            status=str(info.get("status", "running")),
-            nodes=node_names,
+            id=path,
+            name=str(info.get("name", path.rsplit("/", 1)[-1].removesuffix(".unl"))),
+            status=status,
+            nodes=[str(n.get("name", "")) for n in nodes],
         )
 
     async def wait_for_nodes(self, lab_id: str, *, timeout_seconds: int = 600) -> EveLab:
         deadline = time.monotonic() + timeout_seconds
         while True:
             lab = await self.get_lab(lab_id)
-            if lab.status in {"running", "started"} or lab.nodes:
+            if lab.status == "running":
                 return lab
             if time.monotonic() > deadline:
                 raise AdapterTimeout(
@@ -160,23 +214,31 @@ class EveNgAdapter(BaseAdapter):
                 )
             await asyncio.sleep(10)
 
-    async def stop_lab(self, lab_id: str) -> None:
-        encoded = quote(lab_id, safe="")
+    async def start_nodes(self, lab_id: str) -> None:
         await self._request(
-            "POST", f"/api/labs/{encoded}/nodes/stop", json_body={}, idempotent=True
+            "GET", f"{_lab_url(lab_path(lab_id, self.folder))}/nodes/start", idempotent=True
+        )
+
+    async def stop_lab(self, lab_id: str) -> None:
+        await self._request(
+            "GET", f"{_lab_url(lab_path(lab_id, self.folder))}/nodes/stop", idempotent=True
         )
 
     async def wipe_lab(self, lab_id: str) -> None:
-        encoded = quote(lab_id, safe="")
-        await self._request("DELETE", f"/api/labs/{encoded}", idempotent=True)
+        await self._request("DELETE", _lab_url(lab_path(lab_id, self.folder)), idempotent=True)
 
     async def get_console_details(self, lab_id: str, node: str) -> dict[str, str]:
-        lab = await self.get_lab(lab_id)
-        return {
-            "lab": lab.id,
-            "node": node,
-            "console": f"telnet://{self.config.base_url or 'eveng'}/{lab_id}/{node}",
-        }
+        """Console of one node: its ``url`` field (``telnet://host:port``)."""
+        path = lab_path(lab_id, self.folder)
+        for n in await self.list_nodes(path):
+            if str(n.get("name", "")) == node or str(n.get("id", "")) == node:
+                url = str(n.get("url") or "")
+                if not url:
+                    raise AdapterUnavailable(
+                        self.name, "console", f"node {node} has no console url (stopped?)"
+                    )
+                return {"lab": path, "node": node, "console": url}
+        raise AdapterNotFound(self.name, "console", f"node {node} not in lab {path}")
 
     # -- LabAdapter (E4) -------------------------------------------------
 
@@ -186,14 +248,21 @@ class EveNgAdapter(BaseAdapter):
         return lab.id
 
     async def wait_ready(self, lab_id: str, *, timeout_seconds: int = 600) -> list[LabNode]:
-        lab = await self.wait_for_nodes(lab_id, timeout_seconds=timeout_seconds)
-        # EVE-NG get_lab exposes node names only — no kinds or mgmt IPs —
-        # so those stay empty rather than invented.
-        return [LabNode(name=n, kind="", mgmt_ip="", state=lab.status) for n in lab.nodes]
+        await self.wait_for_nodes(lab_id, timeout_seconds=timeout_seconds)
+        return await self.inspect(lab_id)
 
     async def inspect(self, lab_id: str) -> list[LabNode]:
-        lab = await self.get_lab(lab_id)
-        return [LabNode(name=n, kind="", mgmt_ip="", state=lab.status) for n in lab.nodes]
+        # EVE-NG nodes expose no management IP, so mgmt_ip stays empty
+        # rather than invented; kind is the node template.
+        return [
+            LabNode(
+                name=str(n.get("name", "")),
+                kind=str(n.get("template", "")),
+                mgmt_ip="",
+                state=_node_state(n),
+            )
+            for n in await self.list_nodes(lab_path(lab_id, self.folder))
+        ]
 
     async def exec(self, lab_id: str, node: str, command: str) -> str:
         details = await self.get_console_details(lab_id, node)
@@ -217,11 +286,10 @@ class EveNgAdapter(BaseAdapter):
             await self.wipe_lab(lab_id)
 
     def _console_target(self, console_url: str) -> tuple[str, int]:
-        """Telnet (host, port) for a console URL from get_console_details.
+        """Telnet (host, port) from a node console url (``telnet://host:port``).
 
-        That URL is ``telnet://<base_url>/<lab>/<node>`` where base_url
-        carries its own scheme, so it does not parse cleanly; fall back to
-        the configured EVE-NG host on the telnet port (23) in that case.
+        Without a host in the url, fall back to the configured EVE-NG host
+        on the telnet port (23).
         """
         parsed = urlparse(console_url)
         host = parsed.hostname or ""

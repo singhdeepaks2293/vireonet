@@ -1,31 +1,46 @@
 ---
-- name: Post-check — config matches intent, neighbours up, no unexpected diff
+# Post-check: re-run the rendered change in check mode; any remaining diff
+# fails (idempotency). Intent-specific checks run from policies/checks.yaml.
+- name: Post-check rendered change (idempotency)
   hosts: all
   gather_facts: false
+  vars:
+    work_dir: "/tmp/vireonet/{{ ticket | default('unknown') }}"
+    cfg_file: "{{ work_dir }}/{{ inventory_hostname }}.postcheck.cfg"
   tasks:
-    - name: Show running config section for the change
-      cisco.ios.ios_command:
-        commands:
-          - "show running-config {{ post_check_section | default('') }}"
-      register: cfg
-      when: ansible_network_os == 'cisco.ios.ios'
-      changed_when: false
+    - name: Write rendered config (controller)
+      ansible.builtin.copy:
+        content: "{{ intended_config | default('') }}"
+        dest: "{{ cfg_file }}"
+        mode: "0640"
+      delegate_to: localhost
+      check_mode: false
 
-    - name: Assert intended lines are present (IOS)
-      ansible.builtin.assert:
-        that:
-          - intended_lines | default([]) | length == 0 or (cfg.stdout[0] is defined and (intended_lines[0] in cfg.stdout[0] if intended_lines | length > 0 else true))
-        fail_msg: "Post-check failed: intended config not present on {{ inventory_hostname }}"
-      when:
-        - ansible_network_os == 'cisco.ios.ios'
-        - change_type not in ['vlan_remove', 'acl_entry_remove', 'static_route_remove']
-
-    - name: Re-run dry-run — diff must now be empty (idempotency)
+    - name: Idempotency (Cisco IOS / IOS-XE)
       cisco.ios.ios_config:
-        lines: "{{ intended_lines | default([]) }}"
-        parents: "{{ intended_parents | default([]) }}"
-      when: ansible_network_os == 'cisco.ios.ios'
+        src: "{{ cfg_file }}"
+      when: platform in ['ios', 'ios-xe'] and change_type not in ['vlan_remove', 'acl_entry_remove', 'static_route_remove']
       check_mode: true
-      diff: true
-      register: idem
-      failed_when: idem.changed | default(false)
+      register: idem_ios
+      failed_when: idem_ios.changed | default(false)
+
+    - name: Idempotency (Cisco NX-OS)
+      cisco.nxos.nxos_config:
+        src: "{{ cfg_file }}"
+      when: platform == 'nxos' and change_type not in ['vlan_remove', 'acl_entry_remove', 'static_route_remove']
+      check_mode: true
+      register: idem_nxos
+      failed_when: idem_nxos.changed | default(false)
+
+    - name: Idempotency (Arista EOS)
+      arista.eos.eos_config:
+        src: "{{ cfg_file }}"
+      when: platform == 'eos' and change_type not in ['vlan_remove', 'acl_entry_remove', 'static_route_remove']
+      check_mode: true
+      register: idem_eos
+      failed_when: idem_eos.changed | default(false)
+
+    - name: Note platforms without an idempotency check
+      ansible.builtin.debug:
+        msg: "no idempotency check for {{ platform }}; template post-checks apply"
+      when: platform not in ['ios', 'ios-xe', 'nxos', 'eos']

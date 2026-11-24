@@ -7,6 +7,7 @@ from vireonet.adapters.base import AdapterConfig, AdapterHealth
 from vireonet.adapters.errors import AdapterNotFound, AdapterValidationError
 from vireonet.adapters.git.base import (
     GitBaseAdapter,
+    GitCommit,
     GitCommitResult,
     GitFile,
     GitMR,
@@ -55,6 +56,21 @@ class GitHubAdapter(GitBaseAdapter):
             content = base64.b64decode(data.get("content", "")).decode()
             return GitFile(path=path, content=content, sha=str(data.get("sha", "")))
         raise AdapterNotFound(self.name, "get_file", f"file {path} not found at {ref}")
+
+    async def list_commits(self, path: str, ref: str, limit: int = 20) -> list[GitCommit]:
+        data = await self._get(
+            f"/repos/{self.owner}/{self.repo}/commits?sha={ref}&path={path}&per_page={limit}",
+            headers=self._headers(),
+        )
+        return [
+            GitCommit(
+                sha=str(c.get("sha", "")),
+                message=str((c.get("commit") or {}).get("message", "")),
+                author=str(((c.get("commit") or {}).get("author") or {}).get("name", "")),
+                date=str(((c.get("commit") or {}).get("author") or {}).get("date", "")),
+            )
+            for c in (data or [])[:limit]
+        ]
 
     async def create_branch(self, branch: str, from_ref: str) -> str:
         ref_data = await self._get(
@@ -113,6 +129,14 @@ class GitHubAdapter(GitBaseAdapter):
         data = await self._get(
             f"/repos/{self.owner}/{self.repo}/pulls/{mr_id}", headers=self._headers()
         )
+        return self._to_mr(data)
+
+    @staticmethod
+    def _to_mr(data: dict[str, Any]) -> GitMR:
+        # GitHub reports a merged PR as state "closed" + merged true.
+        state = str(data["state"])
+        if state == "closed" and data.get("merged"):
+            state = "merged"
         return GitMR(
             id=int(data["number"]),
             iid=int(data["number"]),
@@ -120,19 +144,17 @@ class GitHubAdapter(GitBaseAdapter):
             source_branch=str(data["head"]["ref"]),
             target_branch=str(data["base"]["ref"]),
             url=str(data["html_url"]),
-            state=str(data["state"]),
+            state=state,
         )
 
     async def get_pipeline(self, mr_id: int) -> GitPipeline:
-        pr = await self.get_mr(mr_id)
-        sha = str(
-            (
-                await self._get(
-                    f"/repos/{self.owner}/{self.repo}/pulls/{mr_id}/commits",
-                    headers=self._headers(),
-                )
-            )[-1]["sha"]
+        # The PR's head sha comes from GET /pulls/{n} (head.sha); /pulls/{n}/commits
+        # is paginated (max 250) so its last item is not reliably the head.
+        data = await self._get(
+            f"/repos/{self.owner}/{self.repo}/pulls/{mr_id}", headers=self._headers()
         )
+        pr = self._to_mr(data)
+        sha = str(data["head"]["sha"])
         runs = await self._get(
             f"/repos/{self.owner}/{self.repo}/commits/{sha}/check-runs", headers=self._headers()
         )

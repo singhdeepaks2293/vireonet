@@ -1,9 +1,25 @@
 ---
+# Back up the running config before a change (one file per device).
+# The BEGIN/END markers are the contract with services/backup.py:
+# extract_running_config() reads the config from exactly that span.
 - name: Backup device config before a change
   hosts: all
   gather_facts: false
   vars:
     backup_dir: "/var/lib/awx/backups/{{ ticket | default('unknown') }}"
+    # Full running config, per platform (used by cli_command for non-module platforms).
+    show_running:
+      ios: show running-config
+      ios-xe: show running-config
+      nxos: show running-config
+      eos: show running-config
+      junos: show configuration
+      exos: show configuration
+      fortios: show full-configuration
+      panos: show config running
+      sros: admin show configuration
+      srlinux: info from running /
+    plat: "{{ platform | default('ios') }}"
   tasks:
     - name: Ensure backup directory exists (controller)
       ansible.builtin.file:
@@ -13,35 +29,26 @@
       delegate_to: localhost
       run_once: true
 
-    - name: Fetch running config (IOS)
-      cisco.ios.ios_command:
-        commands:
-          - show running-config
+    - name: Fetch running config
+      ansible.netcommon.cli_command:
+        command: "{{ show_running[plat] | default('show running-config') }}"
       register: running
-      when: ansible_network_os == 'cisco.ios.ios'
       changed_when: false
 
-    - name: Fetch running config (NX-OS)
-      cisco.nxos.nxos_command:
-        commands:
-          - show running-config
-      register: running
-      when: ansible_network_os == 'cisco.nxos.nxos'
-      changed_when: false
+    - name: Refuse an empty backup
+      ansible.builtin.assert:
+        that: running.stdout | default('') | trim | length > 0
+        fail_msg: "empty running config from {{ inventory_hostname }}; refusing to continue without a backup"
 
     - name: Save running config to controller
       ansible.builtin.copy:
-        content: "{{ running.stdout[0] }}"
+        content: "{{ running.stdout }}"
         dest: "{{ backup_dir }}/{{ inventory_hostname }}.cfg"
         mode: "0640"
       delegate_to: localhost
       changed_when: false
 
-    # The BEGIN/END markers are the contract with services/backup.py:
-    # extract_running_config() reads the config from exactly this span of
-    # the job stdout. Do not rename them.
     - name: Print running config between backup markers
       ansible.builtin.debug:
-        msg: "VIREONET-BACKUP-BEGIN\n{{ running.stdout[0] }}\nVIREONET-BACKUP-END"
-      when: running.stdout is defined
+        msg: "VIREONET-BACKUP-BEGIN\n{{ running.stdout }}\nVIREONET-BACKUP-END"
       changed_when: false

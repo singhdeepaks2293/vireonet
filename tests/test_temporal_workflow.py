@@ -16,6 +16,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from vireonet.adapters.fakes import FakeAwxAdapter, FakeNetBoxAdapter, FakeServiceNowAdapter
+from vireonet.adapters.protocols import NetBoxVlan
 from vireonet.db import Base
 from vireonet.models import Change
 from vireonet.policy import PolicyEngine
@@ -64,10 +65,14 @@ async def _setup_db(tmp_path):  # type: ignore[no-untyped-def]
 
 async def test_workflow_happy_path_closes(tmp_path) -> None:
     factory, change_id, engine = await _setup_db(tmp_path)
+    # NetBox is the source of truth: the VLAN exists there before the change,
+    # so the config_matches_intent post-check passes and the change closes.
+    netbox = FakeNetBoxAdapter()
+    netbox.vlans[200] = NetBoxVlan(200, "new", "dc1")
     activities = ChangeActivities(
         factory,
         servicenow=FakeServiceNowAdapter(),
-        netbox=FakeNetBoxAdapter(),
+        netbox=netbox,
         awx=FakeAwxAdapter(),
         policy=PolicyEngine.default(),
     )

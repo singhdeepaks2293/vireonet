@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
@@ -18,6 +19,9 @@ class CheckContext:
     backups: dict[str, int] = field(default_factory=dict)  # device -> AWX backup job id
     baseline: dict[str, object] = field(default_factory=dict)
     locks_held_by: str = ""  # ticket holding the locks, for the lock check
+    # Runs read-only commands on a device for template command checks:
+    # (device, platform, commands) -> outputs. None: command checks fail.
+    run_commands: Callable[[str, str, list[str]], Awaitable[list[str]]] | None = None
 
 
 @dataclass
@@ -33,7 +37,8 @@ class CheckResult:
 
 
 class Check(Protocol):
-    name: str
+    @property
+    def name(self) -> str: ...
 
     async def run(self, ctx: CheckContext) -> CheckResult: ...
 

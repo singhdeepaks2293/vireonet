@@ -1,68 +1,40 @@
+"""Compatibility wrapper over vireonet.rendering (vendor-neutral renderers).
+
+New code should use vireonet.rendering.Renderer with each device's platform.
+These helpers keep the old single-platform API for CI scripts and Batfish;
+``platforms`` maps device -> platform and defaults every device to IOS.
+"""
+
 from __future__ import annotations
 
 from vireonet.intent import ChangeIntent
+from vireonet.rendering import Renderer
 
 
-def render_intent(intent: ChangeIntent) -> dict[str, list[str]]:
-    """Intent -> per-device config lines. One renderer for CI and the workflow.
-
-    Add = merge lines. Delete = explicit `no` lines (see ansible/playbooks/apply.yml).
-    """
-    per_device: dict[str, list[str]] = {}
-    for device in intent.devices:
-        lines: list[str] = []
-        if intent.change_type == "vlan_add":
-            lines += [f"vlan {intent.vlan_id}", f" name {intent.vlan_name}"]
-            for iface in getattr(intent, "interfaces", []):
-                lines += [
-                    f"interface {iface}",
-                    " switchport mode access",
-                    f" switchport access vlan {intent.vlan_id}",
-                ]
-        elif intent.change_type == "vlan_remove":
-            lines += [f"no vlan {intent.vlan_id}"]
-        elif intent.change_type == "acl_entry_add":
-            lines += [
-                f"ip access-list extended {intent.acl_name}",
-                f" {intent.action} {intent.protocol} {intent.source} {intent.destination}"
-                + (
-                    f" eq {intent.destination_port}"
-                    if getattr(intent, "destination_port", None)
-                    else ""
-                ),
-            ]
-        elif intent.change_type == "acl_entry_remove":
-            lines += [f"ip access-list extended {intent.acl_name}", f" no {intent.sequence}"]
-        elif intent.change_type == "static_route_add":
-            lines += [
-                f"ip route {intent.prefix} {intent.next_hop} {getattr(intent, 'admin_distance', 1)}"
-            ]
-        elif intent.change_type == "static_route_remove":
-            lines += [f"no ip route {intent.prefix} {intent.next_hop}"]  # type: ignore[attr-defined]
-        elif intent.change_type == "interface_set":
-            lines += [f"interface {intent.interface}"]
-            if getattr(intent, "description", None):
-                lines.append(f" description {intent.description}")
-            if getattr(intent, "enabled", None) is False:
-                lines.append(" shutdown")
-            elif getattr(intent, "enabled", None) is True:
-                lines.append(" no shutdown")
-            if getattr(intent, "mtu", None):
-                lines.append(f" mtu {intent.mtu}")
-        elif intent.change_type == "ztp_device":
-            lines += [f"hostname {device}", f"! ztp serial {intent.serial} model {intent.model}"]
-        per_device[device] = lines
-    return per_device
+def render_intent(
+    intent: ChangeIntent,
+    platforms: dict[str, str] | None = None,
+    renderer: Renderer | None = None,
+) -> dict[str, list[str]]:
+    """Intent -> per-device config lines. Adds merge; deletes are explicit
+    `no` (Cisco/Arista) or `delete` (Junos) lines."""
+    r = renderer or Renderer()
+    plats = platforms or {}
+    return {d: r.render(intent, d, plats.get(d, "ios")).lines for d in intent.devices}
 
 
 def render_candidate_configs(
-    intent: ChangeIntent, current_configs: dict[str, str]
+    intent: ChangeIntent,
+    current_configs: dict[str, str],
+    platforms: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Candidate snapshot for Batfish: current config + intended lines per device.
 
     File per device: `<device>.cfg`. Batfish needs full configs, not diffs.
+    Appending works for line-oriented CLI configs (Cisco, Arista). Junos and
+    set-format platforms need a vendor-aware merge before Batfish; not yet done.
     """
-    rendered = render_intent(intent)
+    rendered = render_intent(intent, platforms)
     out: dict[str, str] = {}
     for device, lines in rendered.items():
         current = current_configs.get(device, current_configs.get(f"{device}.cfg", ""))

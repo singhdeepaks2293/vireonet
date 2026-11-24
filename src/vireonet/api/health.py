@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from vireonet.adapters.base import AdapterHealth
+from vireonet.api.security import require_role
 
 router = APIRouter()
 
@@ -57,7 +58,9 @@ def _lab_backend_names(lab_backend: str) -> list[str]:
 
 
 @router.get("/system/health", response_model=SystemHealthResponse)
-async def system_health(request: Request) -> SystemHealthResponse:
+async def system_health(
+    request: Request, _role: str = Depends(require_role("viewer"))
+) -> SystemHealthResponse:
     components: list[ComponentHealth] = []
     # API itself: if this handler runs, the API is up.
     components.append(ComponentHealth(name="api", status="ok", detail="FastAPI responding"))

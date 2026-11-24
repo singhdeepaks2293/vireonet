@@ -1,0 +1,13 @@
+# Your own TextFSM templates. Same format as ntc-templates' index:
+#   Template, Hostname, Platform, Command
+# Platform uses ntc names (cisco_ios, cisco_nxos, arista_eos, juniper_junos,
+# fortinet, paloalto_panos, alcatel_sros, extreme_exos, ...).
+# Command supports the ntc completion syntax: sh[[ow]] ver[[sion]].
+# Entries here win over the bundled ntc-templates for the same command.
+# Keep the header line; one template per line; files live next to this index.
+
+Template, Hostname, Platform, Command
+
+vireonet_cisco_show_logging.textfsm, .*, cisco_ios, sh[[ow]] log[[ging]]
+vireonet_cisco_show_logging.textfsm, .*, cisco_nxos, sh[[ow]] log[[ging]]
+vireonet_cisco_show_logging.textfsm, .*, arista_eos, sh[[ow]] log[[ging]]

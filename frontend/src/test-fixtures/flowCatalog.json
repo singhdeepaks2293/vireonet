@@ -1,0 +1,1863 @@
+{
+ "categories": [
+  {
+   "id": "scripting",
+   "label": "Variables and scripting",
+   "color": "#3daee9"
+  },
+  {
+   "id": "control",
+   "label": "Flow control",
+   "color": "#f67400"
+  },
+  {
+   "id": "network",
+   "label": "Network",
+   "color": "#27ae60"
+  },
+  {
+   "id": "itsm",
+   "label": "ITSM",
+   "color": "#9b59b6"
+  },
+  {
+   "id": "integrations",
+   "label": "API, scripts and people",
+   "color": "#da4453"
+  },
+  {
+   "id": "controllers",
+   "label": "Vendor controllers",
+   "color": "#1d99f3"
+  },
+  {
+   "id": "intelligence",
+   "label": "Intelligence (neural networks)",
+   "color": "#8e44ad"
+  }
+ ],
+ "steps": [
+  {
+   "type": "set_variable",
+   "category": "scripting",
+   "label": "Set variable",
+   "icon": "variable",
+   "description": "Store a value (text, number, list or an expression) in vars.<name>.",
+   "fields": [
+    {
+     "name": "name",
+     "label": "Variable name",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "value",
+     "label": "Value",
+     "kind": "json",
+     "help": "Text, a number, a list, or {{ expression }}."
+    }
+   ]
+  },
+  {
+   "type": "append_to_list",
+   "category": "scripting",
+   "label": "Add to list",
+   "icon": "list",
+   "description": "Append a value to the list in vars.<name> (created if missing).",
+   "fields": [
+    {
+     "name": "name",
+     "label": "List variable",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "value",
+     "label": "Value",
+     "kind": "json"
+    }
+   ]
+  },
+  {
+   "type": "log",
+   "category": "scripting",
+   "label": "Log message",
+   "icon": "log",
+   "description": "Write a line to the run log.",
+   "fields": [
+    {
+     "name": "message",
+     "label": "Message",
+     "kind": "textarea",
+     "required": true
+    },
+    {
+     "name": "level",
+     "label": "Level",
+     "kind": "select",
+     "options": [
+      "info",
+      "warning",
+      "error"
+     ],
+     "default": "info"
+    }
+   ]
+  },
+  {
+   "type": "wait",
+   "category": "scripting",
+   "label": "Wait",
+   "icon": "wait",
+   "description": "Pause for a number of seconds (durable: survives restarts).",
+   "fields": [
+    {
+     "name": "seconds",
+     "label": "Seconds",
+     "kind": "number",
+     "required": true,
+     "default": 60
+    }
+   ]
+  },
+  {
+   "type": "stop",
+   "category": "scripting",
+   "label": "Stop flow",
+   "icon": "stop",
+   "description": "End the run now with success.",
+   "fields": [
+    {
+     "name": "message",
+     "label": "Reason",
+     "kind": "text"
+    }
+   ]
+  },
+  {
+   "type": "fail",
+   "category": "scripting",
+   "label": "Fail",
+   "icon": "fail",
+   "description": "Raise an error: caught by an enclosing Try, otherwise the run fails.",
+   "fields": [
+    {
+     "name": "message",
+     "label": "Error message",
+     "kind": "text",
+     "required": true
+    }
+   ]
+  },
+  {
+   "type": "if",
+   "category": "control",
+   "label": "If / Else if / Otherwise",
+   "icon": "if",
+   "description": "Run the first branch whose condition matches, else the Otherwise steps.",
+   "fields": [],
+   "branches": true,
+   "containers": [
+    "else"
+   ]
+  },
+  {
+   "type": "for_each",
+   "category": "control",
+   "label": "Repeat with each",
+   "icon": "loop",
+   "description": "Run the steps once per item of a list (vars.<as> is the current item).",
+   "fields": [
+    {
+     "name": "items",
+     "label": "List",
+     "kind": "json",
+     "required": true,
+     "help": "e.g. {{ trigger.ticket.fields.devices }}"
+    },
+    {
+     "name": "as",
+     "label": "Item variable",
+     "kind": "text",
+     "default": "item"
+    },
+    {
+     "name": "max_iterations",
+     "label": "Maximum iterations",
+     "kind": "number",
+     "default": 100
+    },
+    {
+     "name": "concurrency",
+     "label": "Items at a time",
+     "kind": "number",
+     "default": 1,
+     "help": "Like NSP/Mistral with-items concurrency: 1 = one after another."
+    }
+   ],
+   "containers": [
+    "steps"
+   ]
+  },
+  {
+   "type": "repeat",
+   "category": "control",
+   "label": "Repeat N times",
+   "icon": "loop",
+   "description": "Run the steps a fixed number of times (vars.<as> is 1, 2, \u2026).",
+   "fields": [
+    {
+     "name": "times",
+     "label": "Times",
+     "kind": "number",
+     "required": true,
+     "default": 3
+    },
+    {
+     "name": "as",
+     "label": "Counter variable",
+     "kind": "text",
+     "default": "attempt"
+    }
+   ],
+   "containers": [
+    "steps"
+   ]
+  },
+  {
+   "type": "while",
+   "category": "control",
+   "label": "Repeat while",
+   "icon": "loop",
+   "description": "Run the steps while the condition is true, up to the maximum.",
+   "fields": [
+    {
+     "name": "condition",
+     "label": "While",
+     "kind": "condition",
+     "required": true
+    },
+    {
+     "name": "max_iterations",
+     "label": "Maximum iterations",
+     "kind": "number",
+     "default": 20,
+     "required": true
+    },
+    {
+     "name": "delay_seconds",
+     "label": "Wait between iterations (s)",
+     "kind": "number",
+     "default": 0
+    }
+   ],
+   "containers": [
+    "steps"
+   ]
+  },
+  {
+   "type": "switch",
+   "category": "control",
+   "label": "Switch",
+   "icon": "switch",
+   "description": "Compare one value with several cases; run the matching case, else Default.",
+   "fields": [
+    {
+     "name": "value",
+     "label": "On value",
+     "kind": "text",
+     "required": true,
+     "default": "{{ vars.platform }}"
+    }
+   ],
+   "cases": true,
+   "containers": [
+    "default"
+   ]
+  },
+  {
+   "type": "parallel",
+   "category": "control",
+   "label": "Run in parallel",
+   "icon": "parallel",
+   "description": "Run several branches at the same time and wait for all of them (join).",
+   "fields": [
+    {
+     "name": "fail_fast",
+     "label": "Stop all branches when one fails",
+     "kind": "bool",
+     "default": true
+    }
+   ],
+   "parallel_branches": true
+  },
+  {
+   "type": "try",
+   "category": "control",
+   "label": "Try / On error / Finally",
+   "icon": "try",
+   "description": "Run steps; on any error run the On error steps (vars.error holds it); always run Finally.",
+   "fields": [],
+   "containers": [
+    "steps",
+    "catch",
+    "finally"
+   ]
+  },
+  {
+   "type": "break",
+   "category": "control",
+   "label": "Exit loop",
+   "icon": "stop",
+   "description": "Leave the innermost loop.",
+   "fields": []
+  },
+  {
+   "type": "continue",
+   "category": "control",
+   "label": "Next iteration",
+   "icon": "loop",
+   "description": "Skip to the next item of the innermost loop.",
+   "fields": []
+  },
+  {
+   "type": "run_flow",
+   "category": "control",
+   "label": "Run another flow",
+   "icon": "flow",
+   "description": "Run a saved flow as a sub-flow and wait for it; its final vars are the result.",
+   "fields": [
+    {
+     "name": "flow",
+     "label": "Flow name",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "inputs",
+     "label": "Inputs",
+     "kind": "kv"
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ]
+  },
+  {
+   "type": "run_commands",
+   "category": "network",
+   "label": "Run show commands",
+   "icon": "terminal",
+   "description": "Run read-only commands on devices (through the execution engine); optionally parse with TextFSM.",
+   "fields": [
+    {
+     "name": "devices",
+     "label": "Devices",
+     "kind": "list",
+     "required": true
+    },
+    {
+     "name": "commands",
+     "label": "Commands",
+     "kind": "list",
+     "required": true
+    },
+    {
+     "name": "parse",
+     "label": "Parse with TextFSM",
+     "kind": "bool",
+     "default": false
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ],
+   "output": "{device: {command: text or parsed rows}}"
+  },
+  {
+   "type": "parse_textfsm",
+   "category": "network",
+   "label": "Parse text (TextFSM)",
+   "icon": "textfsm",
+   "description": "Parse command output with an ntc-template, your own template, or inline template text.",
+   "fields": [
+    {
+     "name": "platform",
+     "label": "Platform",
+     "kind": "text",
+     "required": true,
+     "default": "ios"
+    },
+    {
+     "name": "command",
+     "label": "Command",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "text",
+     "label": "Output text",
+     "kind": "textarea",
+     "required": true
+    },
+    {
+     "name": "template",
+     "label": "Inline template (optional)",
+     "kind": "code"
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ]
+  },
+  {
+   "type": "run_checks",
+   "category": "network",
+   "label": "Run pre/post checks",
+   "icon": "checks",
+   "description": "Run the check templates of a change type (policies/checks.yaml) against devices.",
+   "fields": [
+    {
+     "name": "devices",
+     "label": "Devices",
+     "kind": "list",
+     "required": true
+    },
+    {
+     "name": "change_type",
+     "label": "Change type (check template)",
+     "kind": "text",
+     "required": true,
+     "default": "vlan_add"
+    },
+    {
+     "name": "phase",
+     "label": "Phase",
+     "kind": "select",
+     "options": [
+      "pre",
+      "post"
+     ],
+     "default": "post"
+    },
+    {
+     "name": "intent",
+     "label": "Extra intent fields",
+     "kind": "kv",
+     "help": "e.g. vlan_id: 300"
+    },
+    {
+     "name": "fail_on_error",
+     "label": "Fail the flow when a check fails",
+     "kind": "bool",
+     "default": false
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ],
+   "output": "{ok, results: [{name, ok, message}]}"
+  },
+  {
+   "type": "config_push",
+   "category": "network",
+   "label": "Change: push config",
+   "icon": "push",
+   "description": "Create a VireoNet change (full pipeline: policy, locks, backup, dry-run, waves, checks, rollback) and wait for it.",
+   "fields": [
+    {
+     "name": "intent",
+     "label": "Change intent",
+     "kind": "json",
+     "required": true,
+     "help": "{\"change_type\": \"config_push\", \"devices\": [...], \"configs\": {...}, ...}"
+    },
+    {
+     "name": "ticket_number",
+     "label": "Ticket number",
+     "kind": "text",
+     "required": true,
+     "default": "{{ trigger.ticket.key }}"
+    },
+    {
+     "name": "automation",
+     "label": "Automation",
+     "kind": "select",
+     "options": [
+      "full",
+      "manual"
+     ],
+     "default": "full",
+     "help": "full: pre-approved, no CI gate (needs a planned window); manual: waits for CI and approval."
+    },
+    {
+     "name": "window_minutes",
+     "label": "Planned window from now (minutes)",
+     "kind": "number",
+     "default": 120
+    },
+    {
+     "name": "wait",
+     "label": "Wait for the change to finish",
+     "kind": "bool",
+     "default": true
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ],
+   "output": "{change_id, ticket_number, result}"
+  },
+  {
+   "type": "rollback_change",
+   "category": "network",
+   "label": "Change: roll back",
+   "icon": "rollback",
+   "description": "Ask a running or soaking change to roll back.",
+   "fields": [
+    {
+     "name": "ticket_number",
+     "label": "Change ticket",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "reason",
+     "label": "Reason",
+     "kind": "text"
+    }
+   ]
+  },
+  {
+   "type": "get_device",
+   "category": "network",
+   "label": "Get device (NetBox)",
+   "icon": "device",
+   "description": "Look up a device: platform, site, status, primary IP.",
+   "fields": [
+    {
+     "name": "device",
+     "label": "Device name",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ]
+  },
+  {
+   "type": "itsm_get_ticket",
+   "category": "itsm",
+   "label": "Get ticket",
+   "icon": "ticket",
+   "description": "Read a ticket and its attachments from the ITSM tool.",
+   "fields": [
+    {
+     "name": "ticket",
+     "label": "Ticket",
+     "kind": "text",
+     "required": true,
+     "default": "{{ trigger.ticket.key }}"
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ]
+  },
+  {
+   "type": "itsm_comment",
+   "category": "itsm",
+   "label": "Add work note",
+   "icon": "comment",
+   "description": "Add a work note / comment to a ticket.",
+   "fields": [
+    {
+     "name": "ticket",
+     "label": "Ticket",
+     "kind": "text",
+     "required": true,
+     "default": "{{ trigger.ticket.key }}"
+    },
+    {
+     "name": "text",
+     "label": "Note",
+     "kind": "textarea",
+     "required": true
+    }
+   ]
+  },
+  {
+   "type": "itsm_close",
+   "category": "itsm",
+   "label": "Close ticket",
+   "icon": "close",
+   "description": "Close / resolve a ticket with a closing note.",
+   "fields": [
+    {
+     "name": "ticket",
+     "label": "Ticket",
+     "kind": "text",
+     "required": true,
+     "default": "{{ trigger.ticket.key }}"
+    },
+    {
+     "name": "note",
+     "label": "Close note",
+     "kind": "textarea",
+     "required": true
+    }
+   ]
+  },
+  {
+   "type": "http_request",
+   "category": "integrations",
+   "label": "Call API (HTTP)",
+   "icon": "api",
+   "description": "Call any REST API. Use {{ secrets.NAME }} for tokens (VIREONET_FLOW_SECRET_NAME).",
+   "fields": [
+    {
+     "name": "method",
+     "label": "Method",
+     "kind": "select",
+     "options": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE"
+     ],
+     "default": "GET"
+    },
+    {
+     "name": "url",
+     "label": "URL",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "headers",
+     "label": "Headers",
+     "kind": "kv"
+    },
+    {
+     "name": "query",
+     "label": "Query parameters",
+     "kind": "kv"
+    },
+    {
+     "name": "body",
+     "label": "JSON body",
+     "kind": "json"
+    },
+    {
+     "name": "timeout_seconds",
+     "label": "Timeout (s)",
+     "kind": "number",
+     "default": 30
+    },
+    {
+     "name": "expect_status",
+     "label": "Expected status codes",
+     "kind": "list",
+     "default": [
+      "200-299"
+     ]
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ],
+   "output": "{status, ok, headers, json, text}"
+  },
+  {
+   "type": "script",
+   "category": "integrations",
+   "label": "Run custom script (Python)",
+   "icon": "script",
+   "description": "Run Python on the worker in an isolated process. Read `inputs`, set `result`. Admins only.",
+   "admin_only": true,
+   "fields": [
+    {
+     "name": "code",
+     "label": "Python code",
+     "kind": "code",
+     "required": true,
+     "default": "# inputs: dict from below; vars: flow variables\nresult = {'hello': inputs.get('name', 'world')}\n"
+    },
+    {
+     "name": "inputs",
+     "label": "Inputs",
+     "kind": "kv"
+    },
+    {
+     "name": "timeout_seconds",
+     "label": "Timeout (s)",
+     "kind": "number",
+     "default": 30
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ],
+   "output": "the value of `result` (JSON)"
+  },
+  {
+   "type": "notify",
+   "category": "integrations",
+   "label": "Send notification",
+   "icon": "notify",
+   "description": "Post a message to the configured notification channel (Slack/Teams/webhook).",
+   "fields": [
+    {
+     "name": "message",
+     "label": "Message",
+     "kind": "textarea",
+     "required": true
+    },
+    {
+     "name": "channel",
+     "label": "Channel",
+     "kind": "select",
+     "options": [
+      "",
+      "slack",
+      "teams",
+      "email"
+     ],
+     "default": "",
+     "help": "Empty = VIREONET_NOTIFICATION_DEFAULT_CHANNEL."
+    }
+   ]
+  },
+  {
+   "type": "approval",
+   "category": "integrations",
+   "label": "Ask for approval",
+   "icon": "approval",
+   "description": "Pause until a person approves or rejects in VireoNet (or the timeout passes).",
+   "fields": [
+    {
+     "name": "message",
+     "label": "What to approve",
+     "kind": "textarea",
+     "required": true
+    },
+    {
+     "name": "role",
+     "label": "Who can approve",
+     "kind": "select",
+     "options": [
+      "operator",
+      "approver",
+      "admin"
+     ],
+     "default": "approver"
+    },
+    {
+     "name": "timeout_minutes",
+     "label": "Timeout (minutes)",
+     "kind": "number",
+     "default": 60
+    },
+    {
+     "name": "on_timeout",
+     "label": "On timeout",
+     "kind": "select",
+     "options": [
+      "reject",
+      "approve"
+     ],
+     "default": "reject"
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ],
+   "output": "{approved, by, comment}"
+  },
+  {
+   "type": "controller_get_device",
+   "category": "controllers",
+   "label": "Controller: get device",
+   "icon": "device",
+   "description": "Read a device from its controller (Catalyst Center, CloudVision, Mist, Apstra, FortiManager, Panorama, NSP, ExtremeCloud IQ, Meraki, Aruba Central): version, model, serial, reachability.",
+   "fields": [
+    {
+     "name": "controller",
+     "label": "Controller",
+     "kind": "controller",
+     "default": "auto",
+     "required": true,
+     "help": "A configured controller (VIREONET_CONTROLLERS), or auto: the one that manages the device's platform."
+    },
+    {
+     "name": "device",
+     "label": "Device",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ],
+   "output": "{id, name, platform, version, serial, model, reachable}"
+  },
+  {
+   "type": "controller_list_images",
+   "category": "controllers",
+   "label": "Controller: list software images",
+   "icon": "list",
+   "description": "Software versions the controller can install.",
+   "fields": [
+    {
+     "name": "controller",
+     "label": "Controller",
+     "kind": "controller",
+     "default": "auto",
+     "required": true,
+     "help": "A configured controller (VIREONET_CONTROLLERS), or auto: the one that manages the device's platform."
+    },
+    {
+     "name": "device",
+     "label": "Device (for auto and platform)",
+     "kind": "text"
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ],
+   "output": "[{id, name, version, platform}]"
+  },
+  {
+   "type": "controller_distribute",
+   "category": "controllers",
+   "label": "Controller: distribute image",
+   "icon": "push",
+   "description": "Copy (stage) a software version to the device through its controller. Nothing reloads.",
+   "fields": [
+    {
+     "name": "controller",
+     "label": "Controller",
+     "kind": "controller",
+     "default": "auto",
+     "required": true,
+     "help": "A configured controller (VIREONET_CONTROLLERS), or auto: the one that manages the device's platform."
+    },
+    {
+     "name": "device",
+     "label": "Device",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "version",
+     "label": "Version",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "wait",
+     "label": "Wait until the job finishes",
+     "kind": "bool",
+     "default": true
+    },
+    {
+     "name": "timeout_minutes",
+     "label": "Give up after (minutes)",
+     "kind": "number",
+     "default": 90
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ],
+   "output": "{controller, device, version, job: {id, status, progress, message}}"
+  },
+  {
+   "type": "controller_activate",
+   "category": "controllers",
+   "label": "Controller: activate image",
+   "icon": "rollback",
+   "description": "Install / boot the staged version (the device reloads). Activating the previous version is the OS rollback.",
+   "fields": [
+    {
+     "name": "controller",
+     "label": "Controller",
+     "kind": "controller",
+     "default": "auto",
+     "required": true,
+     "help": "A configured controller (VIREONET_CONTROLLERS), or auto: the one that manages the device's platform."
+    },
+    {
+     "name": "device",
+     "label": "Device",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "version",
+     "label": "Version",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "wait",
+     "label": "Wait until the job finishes",
+     "kind": "bool",
+     "default": true
+    },
+    {
+     "name": "timeout_minutes",
+     "label": "Give up after (minutes)",
+     "kind": "number",
+     "default": 90
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ]
+  },
+  {
+   "type": "controller_upgrade",
+   "category": "controllers",
+   "label": "Controller: upgrade (distribute + activate)",
+   "icon": "push",
+   "description": "One step: the controller's own upgrade where it has one, otherwise distribute then activate.",
+   "fields": [
+    {
+     "name": "controller",
+     "label": "Controller",
+     "kind": "controller",
+     "default": "auto",
+     "required": true,
+     "help": "A configured controller (VIREONET_CONTROLLERS), or auto: the one that manages the device's platform."
+    },
+    {
+     "name": "device",
+     "label": "Device",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "version",
+     "label": "Version",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "wait",
+     "label": "Wait until the job finishes",
+     "kind": "bool",
+     "default": true
+    },
+    {
+     "name": "timeout_minutes",
+     "label": "Give up after (minutes)",
+     "kind": "number",
+     "default": 90
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ]
+  },
+  {
+   "type": "controller_job",
+   "category": "controllers",
+   "label": "Controller: job status",
+   "icon": "wait",
+   "description": "Read a controller job (task) once.",
+   "fields": [
+    {
+     "name": "controller",
+     "label": "Controller",
+     "kind": "controller",
+     "default": "auto",
+     "required": true,
+     "help": "A configured controller (VIREONET_CONTROLLERS), or auto: the one that manages the device's platform."
+    },
+    {
+     "name": "job",
+     "label": "Job id",
+     "kind": "text",
+     "required": true
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ]
+  },
+  {
+   "type": "controller_api",
+   "category": "controllers",
+   "label": "Controller: API call",
+   "icon": "api",
+   "description": "Any other controller API, with the controller's own login (e.g. Catalyst Center templates, CloudVision tags, Mist WLANs).",
+   "fields": [
+    {
+     "name": "controller",
+     "label": "Controller",
+     "kind": "controller",
+     "default": "auto",
+     "required": true,
+     "help": "A configured controller (VIREONET_CONTROLLERS), or auto: the one that manages the device's platform."
+    },
+    {
+     "name": "method",
+     "label": "Method",
+     "kind": "select",
+     "options": [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE"
+     ],
+     "default": "GET"
+    },
+    {
+     "name": "path",
+     "label": "Path",
+     "kind": "text",
+     "required": true,
+     "help": "e.g. /dna/intent/api/v1/site"
+    },
+    {
+     "name": "query",
+     "label": "Query parameters",
+     "kind": "kv"
+    },
+    {
+     "name": "body",
+     "label": "JSON body",
+     "kind": "json"
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ]
+  },
+  {
+   "type": "log_search",
+   "category": "integrations",
+   "label": "Search logs",
+   "icon": "log",
+   "description": "Search a log platform (Elasticsearch, OpenSearch, Splunk, Grafana Loki, Graylog) and get the matching lines.",
+   "fields": [
+    {
+     "name": "backend",
+     "label": "Log platform",
+     "kind": "text",
+     "required": true,
+     "default": "fake",
+     "help": "A name from VIREONET_LOG_BACKENDS (fake mode: fake)."
+    },
+    {
+     "name": "query",
+     "label": "Query",
+     "kind": "text",
+     "required": true,
+     "help": "Elasticsearch/OpenSearch: query_string; Splunk: SPL; Loki: LogQL or text; Graylog: search query."
+    },
+    {
+     "name": "minutes",
+     "label": "Look back (minutes)",
+     "kind": "number",
+     "default": 60
+    },
+    {
+     "name": "limit",
+     "label": "Maximum lines",
+     "kind": "number",
+     "default": 100
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ],
+   "output": "{count, hits: [{timestamp, host, message, fields}]}"
+  },
+  {
+   "type": "log_send",
+   "category": "integrations",
+   "label": "Send event to log platform",
+   "icon": "notify",
+   "description": "Write an event (with any fields) to a log platform, e.g. the flow's result for your SIEM.",
+   "fields": [
+    {
+     "name": "backend",
+     "label": "Log platform",
+     "kind": "text",
+     "required": true,
+     "default": "fake"
+    },
+    {
+     "name": "message",
+     "label": "Message",
+     "kind": "textarea",
+     "required": true
+    },
+    {
+     "name": "fields",
+     "label": "Fields",
+     "kind": "kv"
+    }
+   ]
+  },
+  {
+   "type": "predict_change_risk",
+   "category": "intelligence",
+   "label": "Predict change risk",
+   "icon": "checks",
+   "description": "Neural-network risk score (0\u20131) for a change: blast radius, vendor mix, hour, emergency, past failures. Branch on it, e.g. ask for approval when risk \u2265 0.5.",
+   "fields": [
+    {
+     "name": "change_type",
+     "label": "Change type",
+     "kind": "text",
+     "default": "vlan_add"
+    },
+    {
+     "name": "devices",
+     "label": "Devices (count)",
+     "kind": "number",
+     "default": 1
+    },
+    {
+     "name": "platforms",
+     "label": "Platforms (count)",
+     "kind": "number",
+     "default": 1
+    },
+    {
+     "name": "hour",
+     "label": "Hour (UTC)",
+     "kind": "number",
+     "default": "{{ run.started_at[11:13] | int }}"
+    },
+    {
+     "name": "emergency",
+     "label": "Emergency",
+     "kind": "bool",
+     "default": false
+    },
+    {
+     "name": "prior_failure_rate",
+     "label": "Past failure rate (0\u20131)",
+     "kind": "number",
+     "default": 0.05
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ],
+   "output": "{risk, level: low|medium|high, top_factors, auc}"
+  },
+  {
+   "type": "classify_ticket",
+   "category": "intelligence",
+   "label": "Classify ticket text",
+   "icon": "ticket",
+   "description": "Read a free-text request and suggest the change type, the devices and fields (VLAN id, version).",
+   "fields": [
+    {
+     "name": "text",
+     "label": "Text",
+     "kind": "textarea",
+     "required": true,
+     "default": "{{ trigger.ticket.summary }}"
+    },
+    {
+     "name": "save_as",
+     "label": "Save result as variable",
+     "kind": "text",
+     "help": "The result is always at steps.<step id>; also store it in vars.<name>."
+    }
+   ],
+   "output": "{change_type, confidence, devices, fields}"
+  }
+ ],
+ "triggers": [
+  {
+   "type": "manual",
+   "label": "Manually (Run button or API)",
+   "description": "Start from the Run button or POST /flows/<id>/run with inputs.",
+   "fields": [],
+   "event": {
+    "inputs": {},
+    "user": "alice"
+   }
+  },
+  {
+   "type": "itsm",
+   "label": "ITSM ticket event",
+   "description": "A ticket is created or updated in ServiceNow, Jira, Freshservice, BMC Helix\u2026 (sent to VireoNet's ITSM webhook).",
+   "fields": [
+    {
+     "name": "events",
+     "label": "Events",
+     "kind": "list",
+     "default": [
+      "created",
+      "updated",
+      "state_changed"
+     ]
+    },
+    {
+     "name": "states",
+     "label": "Only in states (optional)",
+     "kind": "list"
+    }
+   ],
+   "event": {
+    "source": "itsm",
+    "event": "state_changed",
+    "provider": "servicenow",
+    "ticket": {
+     "key": "CHG0030005",
+     "summary": "OS UPGRADE leaf-01 to 17.9.4",
+     "status": "Implement",
+     "requester": "carol",
+     "fields": {
+      "category": "network",
+      "priority": "3"
+     }
+    },
+    "previous": {
+     "ticket": {
+      "status": "Scheduled"
+     }
+    }
+   }
+  },
+  {
+   "type": "webhook",
+   "label": "Webhook (any JSON)",
+   "description": "Any system POSTs JSON to /webhooks/flows/<flow id> with the flow's token.",
+   "fields": [],
+   "event": {
+    "source": "webhook",
+    "body": {
+     "alert": "InterfaceDown",
+     "device": "leaf-02"
+    },
+    "headers": {}
+   }
+  },
+  {
+   "type": "schedule",
+   "label": "Schedule",
+   "description": "Run on a cron schedule (UTC), e.g. 0 2 * * 1-5, or every N minutes.",
+   "fields": [
+    {
+     "name": "cron",
+     "label": "Cron (UTC)",
+     "kind": "text",
+     "help": "minute hour day month weekday"
+    },
+    {
+     "name": "every_minutes",
+     "label": "Or every N minutes",
+     "kind": "number"
+    }
+   ],
+   "event": {
+    "source": "schedule",
+    "scheduled_at": "2026-11-24T02:00:00Z"
+   }
+  },
+  {
+   "type": "kafka",
+   "label": "Kafka message (optional)",
+   "description": "A message on a Kafka topic (needs VIREONET_KAFKA_BOOTSTRAP). JSON values are parsed.",
+   "fields": [
+    {
+     "name": "topic",
+     "label": "Topic",
+     "kind": "text",
+     "required": true
+    }
+   ],
+   "event": {
+    "source": "kafka",
+    "topic": "network-events",
+    "key": "leaf-02",
+    "value": {
+     "type": "link_down"
+    }
+   }
+  },
+  {
+   "type": "vireonet",
+   "label": "VireoNet event",
+   "description": "Something happened in VireoNet: a change finished, drift was found, log anomalies were detected.",
+   "fields": [
+    {
+     "name": "events",
+     "label": "Events",
+     "kind": "list",
+     "default": [
+      "change.closed",
+      "change.rolled_back",
+      "change.failed",
+      "drift.detected",
+      "logs.anomaly"
+     ]
+    }
+   ],
+   "event": {
+    "source": "vireonet",
+    "event": "change.rolled_back",
+    "change": {
+     "ticket_number": "CHG0030001",
+     "state": "rolled_back"
+    }
+   }
+  },
+  {
+   "type": "netbox",
+   "label": "NetBox change",
+   "description": "A device, interface, IP, VLAN\u2026 is created, updated or deleted in NetBox (NetBox webhook \u2192 /webhooks/flows/source/netbox).",
+   "fields": [
+    {
+     "name": "events",
+     "label": "Events",
+     "kind": "list",
+     "default": [
+      "created",
+      "updated",
+      "deleted"
+     ]
+    }
+   ],
+   "event": {
+    "source": "netbox",
+    "event": "updated",
+    "model": "device",
+    "name": "leaf-04",
+    "object": {
+     "name": "leaf-04",
+     "status": {
+      "value": "active"
+     },
+     "site": {
+      "slug": "dc1"
+     },
+     "platform": {
+      "slug": "cisco-ios-xe"
+     },
+     "primary_ip4": {
+      "address": "10.0.0.14/24"
+     }
+    },
+    "changed_fields": [
+     "status"
+    ],
+    "user": "netops",
+    "previous": {
+     "object": {
+      "status": {
+       "value": "planned"
+      }
+     }
+    }
+   },
+   "adapter": true
+  },
+  {
+   "type": "zabbix",
+   "label": "Zabbix problem",
+   "description": "A Zabbix trigger fires, recovers or is updated (webhook media type \u2192 /webhooks/flows/source/zabbix).",
+   "fields": [
+    {
+     "name": "events",
+     "label": "Events",
+     "kind": "list",
+     "default": [
+      "problem",
+      "recovery",
+      "update"
+     ]
+    }
+   ],
+   "event": {
+    "source": "zabbix",
+    "event": "problem",
+    "event_id": "8812",
+    "host": "leaf-02",
+    "host_ip": "10.0.0.12",
+    "trigger": "Interface Ethernet1/49: Link down",
+    "severity": "high",
+    "severity_level": 4,
+    "tags": {
+     "interface": "Ethernet1/49",
+     "scope": "availability"
+    }
+   },
+   "adapter": true
+  },
+  {
+   "type": "prometheus",
+   "label": "Prometheus alert",
+   "description": "Alertmanager sends a firing or resolved alert (webhook receiver \u2192 /webhooks/flows/source/prometheus).",
+   "fields": [
+    {
+     "name": "events",
+     "label": "Events",
+     "kind": "list",
+     "default": [
+      "firing",
+      "resolved"
+     ]
+    }
+   ],
+   "event": {
+    "source": "prometheus",
+    "event": "firing",
+    "alertname": "InterfaceErrorsHigh",
+    "severity": "warning",
+    "device": "spine-01",
+    "interface": "Ethernet1/1",
+    "labels": {
+     "alertname": "InterfaceErrorsHigh",
+     "instance": "spine-01:9116",
+     "ifName": "Ethernet1/1"
+    },
+    "annotations": {
+     "summary": "CRC errors > 100/min"
+    }
+   },
+   "adapter": true
+  },
+  {
+   "type": "librenms",
+   "label": "LibreNMS alert",
+   "description": "A LibreNMS alert rule fires or recovers (API transport \u2192 /webhooks/flows/source/librenms).",
+   "fields": [
+    {
+     "name": "events",
+     "label": "Events",
+     "kind": "list",
+     "default": [
+      "alert",
+      "recovery",
+      "acknowledged",
+      "worse",
+      "better"
+     ]
+    }
+   ],
+   "event": {
+    "source": "librenms",
+    "event": "alert",
+    "host": "border-01",
+    "title": "BGP session down",
+    "severity": "critical",
+    "rule": "BGP Session down"
+   },
+   "adapter": true
+  },
+  {
+   "type": "prtg",
+   "label": "PRTG sensor",
+   "description": "A PRTG sensor goes down or up (HTTP action \u2192 /webhooks/flows/source/prtg).",
+   "fields": [
+    {
+     "name": "events",
+     "label": "Events",
+     "kind": "list",
+     "default": [
+      "down",
+      "up",
+      "warning"
+     ]
+    }
+   ],
+   "event": {
+    "source": "prtg",
+    "event": "down",
+    "host": "fw-01",
+    "sensor": "Ping",
+    "status": "Down",
+    "message": "timeout"
+   },
+   "adapter": true
+  },
+  {
+   "type": "solarwinds",
+   "label": "SolarWinds alert",
+   "description": "A SolarWinds Orion alert triggers or resets (web request action \u2192 /webhooks/flows/source/solarwinds).",
+   "fields": [
+    {
+     "name": "events",
+     "label": "Events",
+     "kind": "list",
+     "default": [
+      "triggered",
+      "reset"
+     ]
+    }
+   ],
+   "event": {
+    "source": "solarwinds",
+    "event": "triggered",
+    "host": "leaf-03",
+    "alert": "Node down",
+    "severity": "critical"
+   },
+   "adapter": true
+  },
+  {
+   "type": "git",
+   "label": "Git push / merge",
+   "description": "A push or merge in GitHub, GitLab or Gitea (repo webhook \u2192 /webhooks/flows/source/git).",
+   "fields": [
+    {
+     "name": "events",
+     "label": "Events",
+     "kind": "list",
+     "default": [
+      "push",
+      "merged"
+     ]
+    }
+   ],
+   "event": {
+    "source": "git",
+    "event": "push",
+    "provider": "gitea",
+    "repo": "netops/device-configs",
+    "branch": "main",
+    "files": [
+     "leaf-01/config"
+    ],
+    "devices": [
+     "leaf-01"
+    ],
+    "author": "alice"
+   },
+   "adapter": true
+  },
+  {
+   "type": "awx",
+   "label": "AWX job finished",
+   "description": "An AWX / Ansible Automation Platform job finishes (notification webhook \u2192 /webhooks/flows/source/awx).",
+   "fields": [
+    {
+     "name": "events",
+     "label": "Events",
+     "kind": "list",
+     "default": [
+      "succeeded",
+      "failed",
+      "error",
+      "canceled"
+     ]
+    }
+   ],
+   "event": {
+    "source": "awx",
+    "event": "failed",
+    "job_id": 812,
+    "template": "vireonet-backup",
+    "status": "failed"
+   },
+   "adapter": true
+  }
+ ],
+ "operators": [
+  {
+   "op": "equals",
+   "label": "is equal to"
+  },
+  {
+   "op": "not_equals",
+   "label": "is not equal to"
+  },
+  {
+   "op": "contains",
+   "label": "contains"
+  },
+  {
+   "op": "not_contains",
+   "label": "does not contain"
+  },
+  {
+   "op": "starts_with",
+   "label": "starts with"
+  },
+  {
+   "op": "ends_with",
+   "label": "ends with"
+  },
+  {
+   "op": "matches",
+   "label": "matches regex"
+  },
+  {
+   "op": "not_matches",
+   "label": "does not match regex"
+  },
+  {
+   "op": "wildcard",
+   "label": "matches wildcard (* and ?)"
+  },
+  {
+   "op": "contains_any",
+   "label": "contains any of the words"
+  },
+  {
+   "op": "contains_all",
+   "label": "contains all of the words"
+  },
+  {
+   "op": "in",
+   "label": "is one of"
+  },
+  {
+   "op": "not_in",
+   "label": "is not one of"
+  },
+  {
+   "op": "gt",
+   "label": "is greater than"
+  },
+  {
+   "op": "gte",
+   "label": "is at least"
+  },
+  {
+   "op": "lt",
+   "label": "is less than"
+  },
+  {
+   "op": "lte",
+   "label": "is at most"
+  },
+  {
+   "op": "exists",
+   "label": "exists"
+  },
+  {
+   "op": "missing",
+   "label": "is missing"
+  },
+  {
+   "op": "is_empty",
+   "label": "is empty"
+  },
+  {
+   "op": "not_empty",
+   "label": "is not empty"
+  },
+  {
+   "op": "is_true",
+   "label": "is true"
+  },
+  {
+   "op": "is_false",
+   "label": "is false"
+  },
+  {
+   "op": "changed",
+   "label": "changed (from \u2192 to)"
+  },
+  {
+   "op": "length_gt",
+   "label": "has more items than"
+  }
+ ],
+ "step_settings": [
+  {
+   "name": "run_if",
+   "label": "Run only if",
+   "kind": "condition",
+   "help": "Skip this step unless the condition matches."
+  },
+  {
+   "name": "run_after",
+   "label": "Run after previous step",
+   "kind": "select",
+   "options": [
+    "success",
+    "failure",
+    "always"
+   ],
+   "default": "success",
+   "help": "failure/always: run even when the previous step failed (its error is in vars.error)."
+  },
+  {
+   "name": "retry_count",
+   "label": "Retries",
+   "kind": "number",
+   "default": 0
+  },
+  {
+   "name": "retry_delay_seconds",
+   "label": "Delay between retries (s)",
+   "kind": "number",
+   "default": 10
+  },
+  {
+   "name": "retry_backoff",
+   "label": "Backoff multiplier",
+   "kind": "number",
+   "default": 2
+  },
+  {
+   "name": "timeout_seconds",
+   "label": "Step timeout (s)",
+   "kind": "number",
+   "default": 0,
+   "help": "0 = the action's default."
+  },
+  {
+   "name": "continue_on_error",
+   "label": "Continue on error",
+   "kind": "bool",
+   "default": false,
+   "help": "Record the error and carry on instead of failing."
+  },
+  {
+   "name": "disabled",
+   "label": "Disabled",
+   "kind": "bool",
+   "default": false
+  },
+  {
+   "name": "note",
+   "label": "Note",
+   "kind": "textarea"
+  }
+ ],
+ "input_types": [
+  "text",
+  "number",
+  "bool",
+  "select",
+  "list",
+  "device",
+  "json"
+ ],
+ "vireonet_events": [
+  "change.closed",
+  "change.rolled_back",
+  "change.rollback_failed",
+  "change.failed",
+  "change.rejected",
+  "change.pre_check_failed",
+  "change.ci_failed",
+  "drift.detected",
+  "logs.anomaly"
+ ],
+ "examples": [
+  {
+   "key": "os-upgrade-controller",
+   "name": "OS upgrade via controller (any vendor)",
+   "description": "A ticket 'OS UPGRADE <device> to <version>' in Implement: the device's controller (Catalyst Center, CloudVision, Mist, Apstra, FortiManager, Panorama, NSP, XIQ, Meraki, Aruba Central \u2014 picked automatically from the NetBox platform) upgrades it; verify; close the ticket. On failure, activate the previous version and report on the ticket.",
+   "trigger_type": "itsm"
+  },
+  {
+   "key": "os-upgrade-itsm",
+   "name": "OS upgrade from an ITSM ticket (boot image via change pipeline)",
+   "description": "A ticket whose summary is 'OS UPGRADE <device> to <version>' reaches Implement: check the current version, ask for approval on P1/P2, set the boot image through the full change pipeline (locks, backup, dry-run, checks, Git rollback), verify, and close the ticket \u2014 or report the failure on the ticket.",
+   "trigger_type": "itsm"
+  },
+  {
+   "key": "zabbix-link-down",
+   "name": "Zabbix link down: triage",
+   "description": "A high-severity Zabbix 'Link down on <interface>' problem: look at the interface a few times, then notify with the result.",
+   "trigger_type": "zabbix"
+  },
+  {
+   "key": "netbox-onboarding",
+   "name": "NetBox device activated: onboarding checks",
+   "description": "A device's status changes to active in NetBox: read it, run read-only checks, post the result.",
+   "trigger_type": "netbox"
+  },
+  {
+   "key": "nightly-vlan-audit",
+   "name": "Nightly VLAN audit",
+   "description": "Every night: check that VLAN 100 exists on every leaf; collect the ones without it and notify.",
+   "trigger_type": "schedule"
+  },
+  {
+   "key": "api-and-script",
+   "name": "API call and custom script (learning example)",
+   "description": "Manual run with inputs: call a REST API, transform the answer in Python, branch on the result.",
+   "trigger_type": "manual"
+  }
+ ],
+ "sources": [
+  "alertmanager",
+  "awx",
+  "git",
+  "gitea",
+  "github",
+  "gitlab",
+  "librenms",
+  "netbox",
+  "prometheus",
+  "prtg",
+  "solarwinds",
+  "zabbix"
+ ]
+}

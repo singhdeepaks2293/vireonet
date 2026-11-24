@@ -6,6 +6,12 @@ import Login from "./pages/Login";
 import Adapters from "./pages/Adapters";
 import Approvals from "./pages/Approvals";
 import ChangeDetail from "./pages/ChangeDetail";
+import CheckTemplates from "./pages/CheckTemplates";
+import RenderTemplates from "./pages/RenderTemplates";
+import Topology from "./pages/Topology";
+import MachineLearning from "./pages/MachineLearning";
+import ConfigPush from "./pages/ConfigPush";
+import TextFsm from "./pages/TextFsm";
 import DriftDetail from "./pages/DriftDetail";
 import DriftList from "./pages/DriftList";
 import Exceptions from "./pages/Exceptions";
@@ -17,6 +23,13 @@ import Locks from "./pages/Locks";
 import Scripts from "./pages/Scripts";
 import StyleReference from "./pages/StyleReference";
 import SystemHealth from "./pages/SystemHealth";
+import Help from "./pages/Help";
+import Flows from "./pages/Flows";
+import Controllers from "./pages/Controllers";
+import Gitea from "./pages/Gitea";
+import PrePost from "./pages/PrePost";
+import FlowEditor from "./pages/FlowEditor";
+import FlowRun from "./pages/FlowRun";
 import ZtpDevices from "./pages/ZtpDevices";
 
 const TITLES: Record<string, string> = {
@@ -26,6 +39,12 @@ const TITLES: Record<string, string> = {
   "/exceptions": "Exceptions",
   "/ztp": "ZTP devices",
   "/approvals": "Approvals",
+  "/checks": "Check templates",
+  "/render": "Config templates",
+  "/topology": "Topology",
+  "/intelligence": "Intelligence",
+  "/config-push": "Config push (Excel)",
+  "/textfsm": "TextFSM",
   "/locks": "Locks and change windows",
   "/health": "System health",
   "/adapters": "Adapters",
@@ -57,8 +76,23 @@ function RoutesWithShell({ theme, onToggleTheme }: { theme: "light" | "dark"; on
         <Route path="/exceptions" element={<Exceptions />} />
         <Route path="/ztp" element={<ZtpDevices />} />
         <Route path="/approvals" element={<Approvals />} />
+        <Route path="/checks" element={<CheckTemplates />} />
+        <Route path="/render" element={<RenderTemplates />} />
+        <Route path="/topology" element={<Topology />} />
+        <Route path="/intelligence" element={<MachineLearning />} />
+        <Route path="/ml" element={<Navigate to="/intelligence" replace />} />
+        <Route path="/config-push" element={<ConfigPush />} />
+        <Route path="/textfsm" element={<TextFsm />} />
         <Route path="/locks" element={<Locks />} />
         <Route path="/health" element={<SystemHealth />} />
+        <Route path="/help" element={<Help />} />
+        <Route path="/flows" element={<Flows />} />
+        <Route path="/controllers" element={<Controllers />} />
+        <Route path="/gitea" element={<Gitea />} />
+        <Route path="/prepost" element={<PrePost />} />
+        <Route path="/flows/new" element={<FlowEditor />} />
+        <Route path="/flows/runs/:runId" element={<FlowRun />} />
+        <Route path="/flows/:id" element={<FlowEditor />} />
         <Route path="/adapters" element={<Adapters />} />
         <Route path="/iam" element={<IamUsers />} />
         <Route path="/scripts" element={<Scripts />} />

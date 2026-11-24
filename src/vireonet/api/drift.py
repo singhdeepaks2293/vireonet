@@ -76,6 +76,10 @@ class DriftActionRequest(BaseModel):
     ticket_ref: str = ""
     owner: str | None = None
     expiry: str | None = None
+    # Rollback only: what to restore from Git. "branch" = main/master head
+    # (the approved running config), "previous" = the commit before it, or a
+    # commit SHA. Omitted: branch head when Git is available, else baseline.
+    target: str | None = None
 
 
 class EmergencyAcceptRequest(BaseModel):
@@ -710,6 +714,7 @@ async def drift_rollback(
             actor=user.username,
             reason=payload.reason,
             ticket_ref=payload.ticket_ref,
+            target=payload.target,
         )
     except LockHeldError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

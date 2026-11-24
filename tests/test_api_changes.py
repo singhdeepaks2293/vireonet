@@ -111,3 +111,16 @@ def test_get_change_requires_viewer_role() -> None:
     assert client.get("/changes/does-not-exist").status_code == 404
     # Unknown role falls back to viewer, so it is not a 403; an operator-only
     # route would be. Viewer can read; the 404 proves auth passed and lookup ran.
+
+
+def test_unknown_servicenow_ticket_is_a_404_not_a_500() -> None:
+    from fastapi.testclient import TestClient
+
+    from vireonet.config import Settings
+    from vireonet.main import create_app
+
+    app = create_app(
+        Settings(adapter_mode="fake", dev=True, database_url="sqlite+aiosqlite:///:memory:")
+    )
+    r = TestClient(app).post("/changes", json={"ticket_number": "RITM-DOES-NOT-EXIST"})
+    assert r.status_code == 404 and "not found" in r.json()["detail"]

@@ -15,7 +15,14 @@ from typing import Any, Literal
 from pydantic import BaseModel, model_validator
 
 StepName = Literal[
-    "backup", "pre_check", "dry_run", "apply", "post_check", "rollback", "collect_state"
+    "backup",
+    "pre_check",
+    "dry_run",
+    "apply",
+    "post_check",
+    "rollback",
+    "collect_state",
+    "run_commands",
 ]
 JobType = Literal["playbook", "python"]
 

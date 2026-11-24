@@ -35,6 +35,18 @@ class MergeSignal(BaseModel):
     merged: bool = True
 
 
+class OperatorSignal(BaseModel):
+    reason: str = ""
+
+
+# Must match the checkpoints in temporal/workflow.py. Abort works until apply
+# starts; rollback works from apply until reconcile starts.
+ABORTABLE_STATES = frozenset(
+    {"received", "validated", "planned", "ci_passed", "approved", "pre_checked"}
+)
+ROLLBACKABLE_STATES = frozenset({"applied", "post_checked"})
+
+
 class ChangeResponse(BaseModel):
     id: str
     ticket_number: str
@@ -93,22 +105,36 @@ async def create_change(
         )
     else:
         raise HTTPException(status_code=422, detail="provide intent or ticket_number/sys_id")
-    if (
-        created
-        and str(change.state.value if hasattr(change.state, "value") else change.state)
-        == "validated"
-    ):
-        client = _temporal(request)
-        if client is not None:
-            await client.start_change(
-                ChangeWorkflowInput(
-                    change_id=str(change.id),
-                    ticket_number=change.ticket_number,
-                    intent=change.intent,
-                    requester=change.requester,
-                )
-            )
+    if created:
+        await start_workflow_if_validated(request, change, emergency=payload.emergency)
     return _to_response(change)
+
+
+async def start_workflow_if_validated(
+    request: Request, change: Any, *, emergency: bool = False
+) -> bool:
+    """Start the change workflow for a newly created, validated change."""
+    if str(change.state.value if hasattr(change.state, "value") else change.state) != "validated":
+        return False
+    client = _temporal(request)
+    if client is None:
+        return False
+    await client.start_change(
+        ChangeWorkflowInput(
+            change_id=str(change.id),
+            ticket_number=change.ticket_number,
+            intent=change.intent,
+            requester=change.requester,
+            soak_seconds=request.app.state.settings.post_apply_soak_seconds,
+            skip_ci=bool((change.intent or {}).get("skip_ci", False)),
+            pre_approved=bool((change.intent or {}).get("pre_approved", False)),
+            approval_note=str((change.intent or {}).get("approval_note", "")),
+            window_start=str((change.intent or {}).get("window_start", "")),
+            window_end=str((change.intent or {}).get("window_end", "")),
+            emergency=emergency,
+        )
+    )
+    return True
 
 
 @router.get("/changes", response_model=PaginatedChanges)
@@ -344,26 +370,88 @@ async def reconcile_override(
     )
 
 
+def _state_str(change: Any) -> str:
+    return str(change.state.value if hasattr(change.state, "value") else change.state)
+
+
+async def _operator_signal(
+    request: Request,
+    change_id: str,
+    service: ChangeService,
+    *,
+    kind: str,
+    allowed: frozenset[str],
+    reason: str,
+    actor: str,
+) -> dict[str, str]:
+    change = await service.get(change_id)
+    if change is None:
+        raise HTTPException(status_code=404, detail="change not found")
+    state = _state_str(change)
+    if state not in allowed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{kind} is not possible from state {state} (allowed: {sorted(allowed)})",
+        )
+    client = _temporal(request)
+    if client is None:
+        raise HTTPException(status_code=503, detail="temporal client not configured")
+    full_reason = f"{reason or kind} (by {actor})"
+    try:
+        if kind == "abort":
+            await client.signal_reject(change.ticket_number, full_reason)
+        else:
+            await client.signal_rollback(change.ticket_number, full_reason)
+    except Exception as exc:  # noqa: BLE001 — workflow gone/finished: tell the operator plainly
+        raise HTTPException(
+            status_code=409,
+            detail=f"could not signal the workflow for {change.ticket_number}: {exc}",
+        ) from exc
+    # The workflow owns the state change; it records the real outcome
+    # (rejected / rolled_back / rollback_failed) in the audit trail.
+    return {"ticket": change.ticket_number, "signal": kind, "status": "accepted", "state": state}
+
+
+@router.post("/changes/{change_id}/signals/abort", status_code=202)
+async def signal_abort(
+    change_id: str,
+    request: Request,
+    payload: OperatorSignal | None = None,
+    service: ChangeService = Depends(get_service),
+    user: Any = Depends(require_role("operator")),
+) -> dict[str, str]:
+    """Stop a change before apply. Nothing is pushed; locks are released."""
+    return await _operator_signal(
+        request,
+        change_id,
+        service,
+        kind="abort",
+        allowed=ABORTABLE_STATES,
+        reason=payload.reason if payload else "",
+        actor=getattr(user, "username", "operator"),
+    )
+
+
+@router.post("/changes/{change_id}/signals/rollback", status_code=202)
 async def signal_rollback(
     change_id: str,
     request: Request,
+    payload: OperatorSignal | None = None,
     service: ChangeService = Depends(get_service),
-    _role: str = Depends(require_role("operator")),
+    user: Any = Depends(require_role("operator")),
 ) -> dict[str, str]:
-    try:
-        change = await service.rollback(
-            change_id, actor="api-rollback", reason="manual rollback from UI"
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if change is None:
-        raise HTTPException(status_code=404, detail="change not found")
-    # The Temporal workflow also rolls back on post-check failure; this endpoint
-    # records the manual rollback in the audit trail. The AWX rollback job itself
-    # is launched by the workflow's rollback activity (M4).
-    return {
-        "ticket": change.ticket_number,
-        "signal": "rollback",
-        "status": "accepted",
-        "state": str(change.state.value if hasattr(change.state, "value") else change.state),
-    }
+    """Ask the running workflow to restore pre-change backups via AWX.
+
+    The workflow acts at its next checkpoint (apply finished, post-check
+    finished, or during the soak window) and ends in rolled_back or, if the
+    restore fails, rollback_failed. This endpoint never writes state itself.
+    """
+    return await _operator_signal(
+        request,
+        change_id,
+        service,
+        kind="rollback",
+        allowed=ROLLBACKABLE_STATES,
+        reason=payload.reason if payload else "",
+        actor=getattr(user, "username", "operator"),
+    )

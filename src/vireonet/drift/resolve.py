@@ -428,6 +428,55 @@ async def fetch_baseline_content(
     raise ResolutionError(f"no baseline config found for {device} (config store or device repo)")
 
 
+async def resolve_rollback_source(
+    device: str,
+    target: str | None,
+    *,
+    config_store: Any | None = None,
+    device_repos: Any | None = None,
+) -> tuple[str, str, dict[str, Any]]:
+    """What a drift rollback restores: (content, hash of content, source).
+
+    Git is the source of truth: the main/master branch holds the approved
+    running config at <device>/config (or the per-device repo file).
+
+    - target "branch" / "main" / "master": the branch head (default intent).
+    - target "previous": the commit before the head ("last commit").
+    - target <sha>: that commit from the device's config history.
+    - target None: the branch head when Git history is available, else the
+      legacy baseline (config store, then device repo). An explicit target
+      never falls back: if Git cannot serve it, the rollback is refused.
+    """
+    resolve = getattr(device_repos, "resolve_target", None)
+    read = getattr(device_repos, "running_config_at", None)
+    if callable(resolve) and callable(read):
+        try:
+            commit = await resolve(device, target or "branch")
+            content = await read(device, commit.sha)
+            source = {
+                "source": "git",
+                "target": target or "branch",
+                "ref": commit.sha,
+                "message": commit.message,
+                "branch": getattr(getattr(device_repos, "layout", None), "branch", "main"),
+            }
+            return content, config_hash(normalize_config(content)), source
+        except Exception as exc:  # noqa: BLE001 — explicit targets fail closed below
+            if target is not None:
+                raise ResolutionError(
+                    f"cannot restore {device} from Git ({target}): {exc}"
+                ) from exc
+            log.warning(
+                "git rollback source unavailable; using baseline", device=device, error=str(exc)
+            )
+    elif target is not None:
+        raise ResolutionError("a rollback target needs the Git device repos to be configured")
+    content = await fetch_baseline_content(
+        device, config_store=config_store, device_repos=device_repos
+    )
+    return content, config_hash(normalize_config(content)), {"source": "baseline"}
+
+
 async def confirm_rollback(
     device: str,
     baseline_hash: str | None,
@@ -501,7 +550,13 @@ class RollbackAction:
         return base if count == 0 else f"{base}-{count + 1}"
 
     async def execute(
-        self, record_id: str, *, actor: str, reason: str, ticket_ref: str
+        self,
+        record_id: str,
+        *,
+        actor: str,
+        reason: str,
+        ticket_ref: str,
+        target: str | None = None,
     ) -> dict[str, Any]:
         if self._engine is None:
             raise ResolutionError("rollback needs an execution engine")
@@ -522,10 +577,16 @@ class RollbackAction:
                     "(record must be detected or under_review)"
                 )
             device = str(record.device)
-            baseline_hash = str(record.baseline_hash) if record.baseline_hash else None
-        baseline = await fetch_baseline_content(
-            device, config_store=self._config_store, device_repos=self._device_repos
+            recorded_hash = str(record.baseline_hash) if record.baseline_hash else None
+        baseline, restored_hash, restored_from = await resolve_rollback_source(
+            device,
+            target,
+            config_store=self._config_store,
+            device_repos=self._device_repos,
         )
+        # Confirm against what is actually restored: a "previous" or explicit
+        # commit is not the recorded baseline.
+        baseline_hash = restored_hash if restored_from["source"] == "git" else recorded_hash
         ticket = await self._rollback_ticket(record)
         if self._locks is not None:
             try:
@@ -617,6 +678,7 @@ class RollbackAction:
                         "record_id": str(record.id),
                         "change_ticket": ticket,
                         "change_id": change_id,
+                        "restored_from": restored_from,
                     }
                 await transition_drift(
                     session,
@@ -631,6 +693,7 @@ class RollbackAction:
                     "record_id": str(record.id),
                     "change_ticket": ticket,
                     "change_id": change_id,
+                    "restored_from": restored_from,
                 }
         finally:
             if self._locks is not None:

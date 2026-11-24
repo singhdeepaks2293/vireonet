@@ -668,3 +668,77 @@ These are in the code, not oversights in this guide. Do not assume they work unt
 8. **`recorded` adapter mode** is accepted by config validation but raises at startup — do not use it.
 9. **Notification health** only proves a channel is configured, not that a message was delivered. **DHCP health** always returns `ok` — there is no live DHCP probe.
 10. **Gitea setup job store is in-memory** — a restart loses the job; the install itself (containers, repo, Vault token) survives, but the status page will not show it.
+
+## 11. Vendor controllers
+
+Configured with `VIREONET_CONTROLLERS` (JSON list; see USER_MANUAL §51.3 for every vendor).
+Code: `src/vireonet/controllers/vendors.py` (one class per vendor; each docstring lists the
+exact endpoints). Tests: `tests/test_controllers.py` (mocked vendor APIs).
+
+**Integration test for one controller** (lab first):
+
+1. Add the controller to `VIREONET_CONTROLLERS` on the API and the worker; restart both.
+2. **Controllers** page: status `ok`, your devices listed with the right versions.
+3. Software versions: the list matches what the controller UI offers.
+4. Flow with *Controller: get device* → run → the output matches the controller UI.
+5. On a lab device: *Controller: distribute image* (wait) → check the image on the device.
+6. *Controller: activate image* (wait) → the device reloads into the new version.
+7. *Controller: activate image* with the old version → rollback works.
+
+**UNCERTAIN calls** (built from documentation, not yet run against a live controller):
+
+| Vendor | Call |
+|---|---|
+| Apstra | `POST /api/system-agents/{id}/os-upgrade`, `GET …/job-history` |
+| CloudVision | `saveTopology.do` associate payload (follows cvprac `apply_image_to_element`) |
+| FortiManager | `/um/image/version/list`, `/um/image/upgrade`, task fields |
+| Panorama | Software file naming (`options.image_prefix`) |
+| Nokia NSP | RESTCONF network-element fields; WFM execution envelope |
+| ExtremeCloud IQ | `/devices/{id}/firmware-versions`, `/devices/firmware/upgrade` |
+| Aruba Central | `/firmware/v1/status` values |
+
+## 12. Verification against vendor documentation (2026-11-24)
+
+Every adapter was checked call by call against the vendor's official API documentation (and the
+vendor's own SDK where the docs are thin). Each fix has a test built from the documented
+request and response shapes: `tests/test_*_docs.py`.
+
+| Adapter | Fixed to match the docs | Doc / source |
+|---|---|---|
+| ServiceNow | Attachments upload via `POST /api/now/attachment/upload` (multipart, file last); catalog variables read with `sysparm_display_value=all`; sys_id lookups use `all`; RITM state map (no state 6) | servicenow.com Attachment API, Table API |
+| Jira | Attachment download uses the attachment's `content` URL (Cloud **and** Data Center; `/attachment/content/{id}` is Cloud-only) | Jira DC REST 9.12, Jira Cloud REST v2 |
+| Freshservice | Health `GET /api/v2/tickets?per_page=1` (`/agents/me` is Freshdesk); pre-signed `attachment_url` fetched without auth | api.freshservice.com |
+| BMC Helix | JWT (1 h) refreshed on 401 with one retry; attachment part `application/octet-stream` | docs.bmc.com AR REST |
+| NetBox | v2 tokens (`nbt_…`) sent as `Bearer` (v1 `Token` deprecated in 4.6) | netboxlabs.com REST API |
+| AWX / AAP | API prefix configurable (`VIREONET_AWX_API_PREFIX`, `/api/controller/v2` for AAP 2.5+); stdout `?format=txt`; inventory sync via `update_inventory_sources`; workflow approval by job id | AWX API reference |
+| Gitea | Branch create `POST /repos/{o}/{r}/branches`; pipelines filtered by `head_sha`, `conclusion` mapped | docs.gitea.com API |
+| GitHub | Pipeline sha from the PR `head.sha`; merged PRs reported as merged | docs.github.com REST |
+| GitLab | create vs update per file (both adapters); MR diff via `/diffs` (`/changes` removed in v5) | docs.gitlab.com API |
+| Bitbucket | `/src` commit as form fields (path = content); diff redirect followed; INPROGRESS/STOPPED mapped; raw file text; branch from a commit hash; async merge (202) | developer.atlassian.com Bitbucket Cloud |
+| Vault / Batfish / EVE-NG / containerlab / Kea / Teams | See the infrastructure section below | per-tool docs |
+| Zabbix | `item.get` without `searchWildcardsEnabled` (it matched nothing); errors / discards / dropped items excluded | zabbix.com API reference |
+| Prometheus (gnmic / snmp_exporter) | Device match allows `:port` (PromQL regexes are anchored) | gnmic Prometheus output docs |
+| PRTG | `filter_tags=@tag(...)`, `lastvalue_` column, channel prefix match, history cache (5 req/min limit) | paessler.com API manual |
+| LibreNMS (monitoring) | Device update body `{"field","data"}`; silence via `/devices/{h}/maintenance` | docs.librenms.org API |
+| Webhook sources | NetBox `object_type` + `request.user`; Zabbix `{EVENT.TAGSJSON}`; Gitea header before GitHub; GitLab merge on `action == merge`; GitHub merged only on `closed`; AWX `extra_vars` string; PRTG current status; LibreNMS state 5 | each vendor's webhook docs |
+| Catalyst Center | `deviceUpgradeMode` only when configured | developer.cisco.com SWIM |
+| CloudVision | Image bundle associate via `addTempAction.do` first (cvprac), fqdn; note on Resource-API change controls (CVP 2025.2+) | aristanetworks/cvprac |
+| Mist | Jobs follow `fwupdate.status`; distribute is not "done" at once | mistsys/mist_openapi |
+| Apstra | `POST /api/system-agents/{id}/dos-upgrade`; agent id from `/api/system-agents`; `last_job_status.state`; versions from image name | Juniper apstra-ansible-collection, apstra-go-sdk |
+| FortiManager | `exec /um/image/version/list` → `version_list`, build suffix stripped; version guard | FortiManager JSON-RPC how-to, Ansible collection |
+| Panorama | Image file by model family; per-device job results must be OK | pan-os-python, PAN KB |
+| Nokia NSP | WFM `response.data` is a list; `params.env` | nokia-steward NSP Ansible / automation |
+| ExtremeCloud IQ | `POST /deployments/firmware-metadatas`, `POST /deployments?async=true`, deployment status | api.extremecloudiq.com OpenAPI |
+| Meraki | Org devices paging (`Link` / `startingAfter`) | meraki/openapi |
+| Aruba Central | Versions in `data`; upgrade result lists (no task id); status by `serial` | developer.arubanetworks.com |
+
+**Still not verifiable without a live system** (documentation silent or contradictory, marked
+`UNCERTAIN` in code). Check these on a lab instance first:
+- Nokia NSP: WFM execution envelope and RESTCONF field names
+- FortiManager: `/um/image/upgrade` task fields
+- ExtremeCloud IQ: the async operation reply shape
+- Aruba Central: free-text upgrade states
+- Panorama: `batch software info` and the batch XML element order
+- PRTG: channel names and historicdata timezone
+- Freshservice and BMC: planned-window field names (these differ between tickets and changes;
+  make them match your forms)

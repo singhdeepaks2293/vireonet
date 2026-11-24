@@ -22,6 +22,32 @@ export interface DriftActionBody {
   ticket_ref: string;
   owner?: string;
   expiry?: string;
+  /** Rollback only: "branch" (main/master head), "previous", or a commit SHA. */
+  target?: string;
+}
+
+export interface ConfigCommit {
+  sha: string;
+  message: string;
+  author: string;
+  date: string;
+}
+
+export interface ConfigCommits {
+  hostname: string;
+  repo: string;
+  path: string;
+  branch: string;
+  commits: ConfigCommit[];
+}
+
+export function useConfigCommits(device: string | undefined) {
+  return useQuery({
+    queryKey: ["config-commits", device],
+    queryFn: () => request<ConfigCommits>(`/config/devices/${encodeURIComponent(device ?? "")}/commits`),
+    enabled: Boolean(device),
+    retry: false,
+  });
 }
 
 export function buildDriftQuery(filters: DriftFilters): string {

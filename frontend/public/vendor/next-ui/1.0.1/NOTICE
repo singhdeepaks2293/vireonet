@@ -1,0 +1,12 @@
+NeXt UI Toolkit 1.0.1
+https://github.com/NeXt-UI/next-bower (tag 1.0.1, commit ef4a23267d0e4d5cac86260e7f5fcec5ef677403)
+Copyright (c) Cisco Systems, Inc. and NeXt UI contributors.
+
+Licensed under the Eclipse Public License v1.0 (EPL-1.0):
+https://www.eclipse.org/legal/epl-v10.html
+
+Redistributed unmodified: js/next.min.js, css/next.min.css, fonts/next-font.*.
+The Cisco Sans fonts referenced by next.min.css are NOT redistributed here
+(their licence is unclear); browsers fall back to the next font in the stack.
+Checksums: SHA256SUMS. To update, download the same files from a newer tag
+and refresh SHA256SUMS.

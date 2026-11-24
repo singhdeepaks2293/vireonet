@@ -101,23 +101,47 @@ def _mock_eveng_lab() -> None:
             200, json={"status": "success"}, headers={"Set-Cookie": "session=abc; Path=/"}
         )
     )
+    # Real EVE-NG answers lab creation with a message only (no lab path).
     respx.post(f"{BASE}/api/labs").mock(
-        return_value=Response(201, json={"data": {"path": "/ci-1"}})
+        return_value=Response(
+            200, json={"code": 200, "status": "success", "message": "Lab has been created"}
+        )
     )
-    respx.get(url__regex=r".*/api/labs/.*").mock(
+    respx.get(f"{BASE}/api/labs/ci-1.unl/nodes/start").mock(
+        return_value=Response(200, json={"code": 200, "status": "success"})
+    )
+    respx.get(f"{BASE}/api/labs/ci-1.unl/nodes/stop").mock(
+        return_value=Response(200, json={"code": 200, "status": "success"})
+    )
+    respx.get(f"{BASE}/api/labs/ci-1.unl/nodes").mock(
         return_value=Response(
             200,
             json={
+                "code": 200,
+                "status": "success",
                 "data": {
-                    "name": "ci-1",
-                    "status": "running",
-                    "nodes": {"leaf-01": {}, "leaf-02": {}},
-                }
+                    "1": {
+                        "id": 1,
+                        "name": "leaf-01",
+                        "status": 2,
+                        "template": "iol",
+                        "url": "telnet://eveng.example:32769",
+                    },
+                    "2": {
+                        "id": 2,
+                        "name": "leaf-02",
+                        "status": 2,
+                        "template": "iol",
+                        "url": "telnet://eveng.example:32770",
+                    },
+                },
             },
         )
     )
-    respx.post(url__regex=r".*/nodes/stop.*").mock(return_value=Response(200, json={}))
-    respx.delete(url__regex=r".*/api/labs/.*").mock(return_value=Response(200, json={}))
+    respx.get(f"{BASE}/api/labs/ci-1.unl").mock(
+        return_value=Response(200, json={"data": {"name": "ci-1", "filename": "ci-1.unl"}})
+    )
+    respx.delete(f"{BASE}/api/labs/ci-1.unl").mock(return_value=Response(200, json={}))
 
 
 @respx.mock
@@ -131,11 +155,12 @@ async def test_contract_against_eveng_adapter(monkeypatch: pytest.MonkeyPatch) -
         return "Cisco IOS Software, Version 15.2\n"
 
     monkeypatch.setattr(adapter, "_telnet", fake_telnet)
-    # EVE-NG get_lab exposes node names only — no mgmt IPs — so the
-    # contract runs with expect_mgmt_ip=False (honest, not invented).
+    # EVE-NG nodes expose no mgmt IPs — so the contract runs with
+    # expect_mgmt_ip=False (honest, not invented).
     await check_lab(adapter, "topologies/two-leaf.unl", "ci-1", expect_mgmt_ip=False)
+    # Console target comes from the node's "url" field.
     assert seen["host"] == "eveng.example"
-    assert seen["port"] == 23
+    assert seen["port"] == 32769
     assert seen["command"] == "show version"
     assert isinstance(adapter, LabAdapter)
 
@@ -150,7 +175,7 @@ async def test_eveng_exec_telnet_failure_is_adapter_unavailable(
     # _telnet path runs and fails fast (connection refused, no network).
     monkeypatch.setattr(adapter, "_console_target", lambda url: ("127.0.0.1", 1))
     with pytest.raises(AdapterUnavailable, match="telnet"):
-        await adapter.exec("/ci-1", "leaf-01", "show version")
+        await adapter.exec("/ci-1.unl", "leaf-01", "show version")
 
 
 @respx.mock
@@ -160,13 +185,14 @@ async def test_eveng_old_methods_still_work() -> None:
     _mock_eveng_lab()
     adapter = _eveng_adapter()
     lab = await adapter.start_lab("ci-1", "two-leaf.unl")
-    assert lab.id == "/ci-1"
+    assert lab.id == "/ci-1.unl"
     loaded = await adapter.load_topology(lab.id, "two-leaf.unl")
     assert loaded.nodes == ["two-leaf.unl"]
     ready = await adapter.wait_for_nodes(lab.id, timeout_seconds=5)
     assert set(ready.nodes) == {"leaf-01", "leaf-02"}
     details = await adapter.get_console_details(lab.id, "leaf-01")
-    assert details["node"] == "leaf-01" and details["console"].startswith("telnet://")
+    assert details["node"] == "leaf-01"
+    assert details["console"] == "telnet://eveng.example:32769"
     await adapter.stop_lab(lab.id)
     await adapter.wipe_lab(lab.id)
     # destroy = stop + wipe, via the mocked endpoints.

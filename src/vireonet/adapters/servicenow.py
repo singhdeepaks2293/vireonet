@@ -26,9 +26,25 @@ SN_TABLES = {
     "change": "change_request",
     "approval": "sysapproval_approver",
 }
+
+
+def table_for(ticket: str) -> str:
+    """Change Requests (CHG...) live in change_request; everything else is a
+    request item (RITM...)."""
+    return SN_TABLES["change"] if ticket.upper().startswith("CHG") else SN_TABLES["request_item"]
+
+
 # ServiceNow state values are numeric strings by default (e.g. 1=new, 3=closed).
 # Map our words to the instance's values here.
-SN_STATE_MAP = {"open": "1", "in_progress": "2", "closed": "3", "resolved": "6"}
+# sc_req_item states: 1 Open, 2 Work in Progress, 3 Closed Complete,
+# 4 Closed Incomplete, 7 Closed Skipped ("resolved" has no RITM state: Closed Complete).
+SN_STATE_MAP = {
+    "open": "1",
+    "in_progress": "2",
+    "closed": "3",
+    "resolved": "3",
+    "closed_incomplete": "4",
+}
 
 
 def _map_status(status: int, adapter: str, operation: str, body: str = "") -> Exception:
@@ -146,7 +162,9 @@ class ServiceNowAdapter(BaseAdapter):
         params: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
         files: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
         idempotent: bool,
+        raw: bool = False,
         _retried_auth: bool = False,
     ) -> Any:
         async def do() -> Any:
@@ -159,7 +177,13 @@ class ServiceNowAdapter(BaseAdapter):
             ) as client:
                 try:
                     resp = await client.request(
-                        method, path, params=params, json=json_body, files=files, headers=headers
+                        method,
+                        path,
+                        params=params,
+                        json=json_body,
+                        files=files,
+                        data=data,
+                        headers=headers,
                     )
                 except httpx.TimeoutException as exc:
                     raise AdapterTimeout(self.name, method, str(exc)) from exc
@@ -170,6 +194,8 @@ class ServiceNowAdapter(BaseAdapter):
                     raise AdapterAuthError(self.name, method, "token expired")
                 if resp.status_code >= 400:
                     raise _map_status(resp.status_code, self.name, method, resp.text[:500])
+                if raw:
+                    return resp.content
                 return resp.json() if resp.content else {}
 
         try:
@@ -187,7 +213,9 @@ class ServiceNowAdapter(BaseAdapter):
                 params=params,
                 json_body=json_body,
                 files=files,
+                data=data,
                 idempotent=idempotent,
+                raw=raw,
                 _retried_auth=True,
             )
 
@@ -197,10 +225,20 @@ class ServiceNowAdapter(BaseAdapter):
         def val(v: Any) -> str:
             return str(v["value"]) if isinstance(v, dict) else str(v or "")
 
+        def display(v: Any) -> str:
+            return (
+                str(v.get("display_value") or v.get("value") or "")
+                if isinstance(v, dict)
+                else str(v or "")
+            )
+
         return SNRequest(
             ticket=val(row.get("number")),
-            short_description=str(row.get("short_description") or ""),
+            short_description=display(row.get("short_description")),
             state=val(row.get("state")),
+            state_display=display(row.get("state")),
+            planned_start=val(row.get("start_date")),
+            planned_end=val(row.get("end_date")),
             requested_by=val(row.get("requested_for") or row.get("opened_by")),
             sys_id=val(row.get("sys_id")),
             variables=variables or {},
@@ -225,7 +263,11 @@ class ServiceNowAdapter(BaseAdapter):
             if not opt_id:
                 continue
             opt = await self._request(
-                "GET", f"/api/now/table/sc_item_option/{opt_id}", idempotent=True
+                "GET",
+                f"/api/now/table/sc_item_option/{opt_id}",
+                # Without display_value, reference fields have no display_value.
+                params={"sysparm_display_value": "all"},
+                idempotent=True,
             )
             r = opt.get("result", {})
             if r.get("item_option_new"):
@@ -240,10 +282,11 @@ class ServiceNowAdapter(BaseAdapter):
     async def get_request(self, ticket: str) -> SNRequest:
         data = await self._request(
             "GET",
-            f"/api/now/table/{SN_TABLES['request_item']}",
+            f"/api/now/table/{table_for(ticket)}",
             params={
                 "sysparm_query": f"number={ticket}",
-                "sysparm_display_value": "true",
+                # "all": every field as {"value", "display_value"} (raw + label).
+                "sysparm_display_value": "all",
                 "sysparm_limit": "1",
             },
             idempotent=True,
@@ -265,7 +308,7 @@ class ServiceNowAdapter(BaseAdapter):
         data = await self._request(
             "GET",
             f"/api/now/table/{SN_TABLES['request_item']}/{sys_id}",
-            params={"sysparm_display_value": "true"},
+            params={"sysparm_display_value": "all"},
             idempotent=True,
         )
         row = data.get("result", {})
@@ -282,7 +325,7 @@ class ServiceNowAdapter(BaseAdapter):
             body["work_notes"] = work_notes
         await self._request(
             "PATCH",
-            f"/api/now/table/{SN_TABLES['request_item']}/{req.sys_id}",
+            f"/api/now/table/{table_for(ticket)}/{req.sys_id}",
             json_body=body,
             idempotent=True,
         )
@@ -292,16 +335,27 @@ class ServiceNowAdapter(BaseAdapter):
     async def add_work_note(self, ticket: str, note: str, idempotency_key: str) -> bool:
         if idempotency_key in self._notes_seen:
             return False
-        await self.update_state(ticket, (await self.get_request(ticket)).state, work_notes=note)
+        # Only the work note: re-writing the state would fire state business rules.
+        req = await self.get_request(ticket)
+        await self._request(
+            "PATCH",
+            f"/api/now/table/{table_for(ticket)}/{req.sys_id}",
+            json_body={"work_notes": note},
+            idempotent=True,
+        )
         self._notes_seen.add(idempotency_key)
         return True
 
     async def close(self, ticket: str, close_notes: str) -> SNRequest:
         req = await self.get_request(ticket)
         body: dict[str, Any] = {"state": SN_STATE_MAP["closed"], "close_notes": close_notes}
+        if table_for(ticket) == SN_TABLES["change"]:
+            # Change Requests need a close code; "Review" (0) then "Closed" (3) is
+            # the usual model — set Closed with a successful close code.
+            body["close_code"] = "successful"
         await self._request(
             "PATCH",
-            f"/api/now/table/{SN_TABLES['request_item']}/{req.sys_id}",
+            f"/api/now/table/{table_for(ticket)}/{req.sys_id}",
             json_body=body,
             idempotent=True,
         )
@@ -310,19 +364,57 @@ class ServiceNowAdapter(BaseAdapter):
 
     async def attach_file(self, ticket: str, filename: str, content: bytes) -> str:
         req = await self.get_request(ticket)
-        # Attachment API is a multipart POST — not idempotent, so no retry in _request.
+        # Attachment API: POST /api/now/attachment/upload is the multipart form
+        # (table_name, table_sys_id, then the file part last). /attachment/file
+        # takes a raw binary body instead. Not idempotent: no retry.
+        import mimetypes
+
+        # Explicit types for what VireoNet attaches: slim containers often have
+        # no /etc/mime.types, so mimetypes alone would say octet-stream for .xlsx.
+        known = {
+            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
+            ".csv": "text/csv",
+            ".json": "application/json",
+            ".txt": "text/plain",
+            ".pdf": "application/pdf",
+        }
+        ext = filename[filename.rfind(".") :].lower() if "." in filename else ""
+        mime = known.get(ext) or mimetypes.guess_type(filename)[0] or "application/octet-stream"
         data = await self._request(
             "POST",
-            "/api/now/attachment/file",
-            params={
-                "table_name": SN_TABLES["request_item"],
-                "table_sys_id": req.sys_id,
-                "file_name": filename,
-            },
-            files={"file": (filename, content)},
+            "/api/now/attachment/upload",
+            data={"table_name": table_for(ticket), "table_sys_id": req.sys_id},
+            files={"uploadFile": (filename, content, mime)},
             idempotent=False,
         )
         return str(data.get("result", {}).get("sys_id", ""))
+
+    async def list_attachments(self, ticket: str) -> list[dict[str, Any]]:
+        """Attachments on the request item: [{id, filename, size, content_type}]."""
+        req = await self.get_request(ticket)
+        data = await self._request(
+            "GET",
+            "/api/now/attachment",
+            params={"sysparm_query": f"table_sys_id={req.sys_id}", "sysparm_limit": "100"},
+            idempotent=True,
+        )
+        return [
+            {
+                "id": str(a.get("sys_id", "")),
+                "filename": str(a.get("file_name", "")),
+                "size": int(a.get("size_bytes") or 0),
+                "content_type": str(a.get("content_type", "")),
+            }
+            for a in data.get("result", [])
+        ]
+
+    async def download_attachment(self, attachment_id: str) -> bytes:
+        return bytes(
+            await self._request(
+                "GET", f"/api/now/attachment/{attachment_id}/file", idempotent=True, raw=True
+            )
+        )
 
     async def get_approval_state(self, ticket: str) -> str:
         req = await self.get_request(ticket)

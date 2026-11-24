@@ -9,8 +9,8 @@ from vireonet.adapters.base import AdapterConfig, AdapterHealth, BaseAdapter
 from vireonet.adapters.errors import AdapterUnavailable, AdapterValidationError
 from vireonet.adapters.protocols import BatfishResult
 
-# UNCERTAIN — pybatfish question names / column names vary by Batfish version.
-# Change only this dict if your version renames a question.
+# pybatfish question names (session.q.<name>). Change only this dict if a
+# Batfish release renames a question.
 BATFISH_QUESTIONS = {
     "undefined_references": "undefinedReferences",
     "duplicate_ips": "ipOwners",
@@ -18,56 +18,87 @@ BATFISH_QUESTIONS = {
     "reachability": "reachability",
     "routes": "routes",
 }
+DIFFERENTIAL_REACHABILITY = "differentialReachability"
 
-# UNCERTAIN — the differential API surface (answer(snapshot=...,
-# reference_snapshot=...) and the Differential/Status column names) varies by
-# Batfish/pybatfish version. _differential_rows falls back to
-# q(differential=True) when the snapshot kwargs are rejected.
-_DIFFERENTIAL_QUESTIONS = {
-    "reachability": BATFISH_QUESTIONS["reachability"],
-    "routes": BATFISH_QUESTIONS["routes"],
-    "bgp_session_status": BATFISH_QUESTIONS["bgp_session_status"],
-    "undefined_references": BATFISH_QUESTIONS["undefined_references"],
-    "duplicate_ips": BATFISH_QUESTIONS["duplicate_ips"],
-}
+# Single-snapshot gating questions, also run on the candidate in the
+# differential analysis. Duplicate IPs use ipOwners(duplicatesOnly=True):
+# every returned row is a duplicate.
+_GATE_KWARGS: dict[str, dict[str, Any]] = {"duplicate_ips": {"duplicatesOnly": True}}
 
-_LOST_TOKENS = ("decreased", "lost", "denied", "unreachable", "no_route", "not_reachable")
-_GAINED_TOKENS = ("increased", "gained", "permitted", "reachable")
+# Batfish flow dispositions that mean the flow got where it was going.
+# https://batfish.readthedocs.io/en/latest/notebooks/forwarding.html
+_SUCCESS_DISPOSITIONS = frozenset({"ACCEPTED", "DELIVERED_TO_SUBNET", "EXITS_NETWORK"})
 
 
 def _write_snapshot(parent: Path, name: str, files: dict[str, str]) -> Path:
-    """Write one snapshot's config files under parent/name. Batfish reads from files, not memory."""
+    """Write one snapshot's device configs under parent/name/configs/.
+
+    Batfish reads snapshots from disk and expects device configs in the
+    snapshot's ``configs/`` subdirectory.
+    https://batfish.readthedocs.io/en/latest/notebooks/interacting.html#Packaging-snapshot-data
+    """
     snap_dir = parent / name
-    snap_dir.mkdir()
+    configs = snap_dir / "configs"
+    configs.mkdir(parents=True)
     for file_name, content in files.items():
-        target = snap_dir / file_name
+        rel = Path(file_name)
+        if rel.parts and rel.parts[0] == "configs":
+            rel = Path(*rel.parts[1:])
+        target = configs / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
     return snap_dir
 
 
-def _row_status(row: dict[str, Any]) -> str:
-    """Differential status of one question row. Column names vary by Batfish
-    version, so check the known names in order; unknown rows count as 'changed'."""
-    for key in ("Differential", "Status", "FlowDisposition", "status", "disposition"):
-        value = row.get(key)
-        if value is not None and str(value) != "":
-            return str(value).lower()
-    return "changed"
+def _dispositions(traces: Any) -> set[str]:
+    """Dispositions of a Snapshot_Traces / Reference_Traces cell.
+
+    pybatfish returns a list of Trace objects (``.disposition``); dicts and
+    plain strings are accepted too so serialised answers parse the same way.
+    """
+    if traces is None:
+        return set()
+    if isinstance(traces, (str, dict)) or not isinstance(traces, (list, tuple, set)):
+        traces = [traces]
+    out: set[str] = set()
+    for trace in traces:
+        if isinstance(trace, str):
+            value: Any = trace
+        elif isinstance(trace, dict):
+            value = trace.get("disposition")
+        else:
+            value = getattr(trace, "disposition", None)
+        if value:
+            out.add(str(value).upper())
+    return out
+
+
+def _flow_succeeds(traces: Any) -> bool | None:
+    disp = _dispositions(traces)
+    if not disp:
+        return None
+    return bool(disp & _SUCCESS_DISPOSITIONS)
 
 
 def _classify(rows: list[dict[str, Any]]) -> dict[str, object]:
-    """Count reachability-differential rows as lost / gained / changed."""
+    """Classify differentialReachability rows as lost / gained / changed.
+
+    Each row is a flow whose behaviour differs between the candidate
+    (``Snapshot_Traces``) and the current/reference (``Reference_Traces``)
+    snapshot. Lost = succeeded in reference, fails in candidate; gained = the
+    opposite; anything else (e.g. different path, same outcome) = changed.
+    """
     lost = gained = changed = 0
     lost_sample: list[dict[str, Any]] = []
     gained_sample: list[dict[str, Any]] = []
     for row in rows:
-        status = _row_status(row)
-        if any(token in status for token in _LOST_TOKENS):
+        snap = _flow_succeeds(row.get("Snapshot_Traces"))
+        ref = _flow_succeeds(row.get("Reference_Traces"))
+        if ref is True and snap is False:
             lost += 1
             if len(lost_sample) < 5:
                 lost_sample.append(row)
-        elif any(token in status for token in _GAINED_TOKENS):
+        elif ref is False and snap is True:
             gained += 1
             if len(gained_sample) < 5:
                 gained_sample.append(row)
@@ -81,6 +112,16 @@ def _classify(rows: list[dict[str, Any]]) -> dict[str, object]:
         "lost_sample": lost_sample,
         "gained_sample": gained_sample,
     }
+
+
+def _bgp_down(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """bgpSessionStatus rows whose Established_Status is not ESTABLISHED."""
+    return [
+        r
+        for r in rows
+        if r.get("Established_Status") is not None
+        and str(r.get("Established_Status")).upper() != "ESTABLISHED"
+    ]
 
 
 class BatfishAdapter(BaseAdapter):
@@ -141,16 +182,28 @@ class BatfishAdapter(BaseAdapter):
             ) from exc
         return self._session
 
-    def _question_rows(self, session: Any, question: str) -> list[dict[str, Any]]:
+    def _question_rows(
+        self,
+        session: Any,
+        question: str,
+        *,
+        snapshot: str = "candidate",
+        reference_snapshot: str | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         """Run one pybatfish question and return rows as dicts.
 
-        pybatfish questions return an answer object whose .frame() is a
-        pandas DataFrame. Column names differ by question; we return the
-        raw rows so the gate can count / inspect them without inventing columns.
+        ``session.q.<question>(**params).answer(snapshot=...)`` returns an
+        answer whose .frame() is a pandas DataFrame; rows are returned raw.
+        With ``reference_snapshot`` the question is answered differentially
+        (rows carry Snapshot_* / Reference_* columns).
         """
+        answer_kwargs: dict[str, Any] = {"snapshot": snapshot}
+        if reference_snapshot is not None:
+            answer_kwargs["reference_snapshot"] = reference_snapshot
         try:
             q = getattr(session.q, question)
-            answer = q().answer()
+            answer = q(**(params or {})).answer(**answer_kwargs)
             frame = answer.frame()
         except Exception as exc:
             raise AdapterUnavailable(self.name, question, str(exc)) from exc
@@ -167,83 +220,43 @@ class BatfishAdapter(BaseAdapter):
         session = self._ensure_session()
         # Write the candidate snapshot to disk — Batfish reads from files, not memory.
         with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
-            snap_dir = Path(tmp) / "candidate"
-            snap_dir.mkdir()
-            for name, content in files.items():
-                target = snap_dir / name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content)
+            snap_dir = _write_snapshot(Path(tmp), "candidate", files)
             try:
                 session.init_snapshot(str(snap_dir), name="candidate", overwrite=True)
             except Exception as exc:
                 raise AdapterUnavailable(self.name, "init_snapshot", str(exc)) from exc
-            failures: list[str] = []
-            evidence: dict[str, Any] = {}
-            for label, question in BATFISH_QUESTIONS.items():
-                rows = self._question_rows(session, question)
-                evidence[label] = {"rows": len(rows)}
-                if label == "undefined_references" and rows:
-                    failures.append(f"undefined references: {len(rows)}")
-                    evidence[label]["sample"] = rows[:3]
-                if label == "duplicate_ips":
-                    # ipOwners rows with >1 owner are duplicates. The exact
-                    # column is version-specific; count rows where any value
-                    # looks like a list with >1 entry.
-                    dups = [
-                        r
-                        for r in rows
-                        if any(isinstance(v, (list, tuple)) and len(v) > 1 for v in r.values())
-                    ]
-                    if dups:
-                        failures.append(f"duplicate IPs: {len(dups)}")
-                if label == "bgp_session_status":
-                    down = [
-                        r
-                        for r in rows
-                        if str(r.get("Established_Status", r.get("status", ""))).lower()
-                        not in {"established", "established_status"}
-                        and r
-                    ]
-                    # Only fail on rows that explicitly say a session is down.
-                    down = [
-                        r
-                        for r in rows
-                        if "down" in str(r).lower() or "not_established" in str(r).lower()
-                    ]
-                    if down:
-                        failures.append(f"BGP sessions down: {len(down)}")
-                if label == "reachability":
-                    # Reachability question returns flows; an empty result with
-                    # a candidate that should be reachable is not, by itself,
-                    # a failure — differential reachability is the gate in CI.
-                    evidence[label]["note"] = (
-                        "reachability rows counted, differential check runs in CI"
-                    )
+            failures, evidence = self._gate_checks(session, "candidate")
+            evidence["reachability"] = {
+                "note": "single snapshot: no reachability gate; differentialReachability runs "
+                "when a current snapshot is available"
+            }
             return BatfishResult(passed=not failures, failures=failures, evidence=evidence)
 
-    def _differential_rows(self, session: Any, question: str) -> list[dict[str, Any]]:
-        """Run one pybatfish question differentially (candidate vs current snapshot).
-
-        Primary form is answer(snapshot="candidate", reference_snapshot="current").
-        Older pybatfish versions reject those kwargs; fall back to
-        q(differential=True).answer(). Column names vary by version; rows are
-        returned raw, as in _question_rows.
-        """
-        try:
-            q = getattr(session.q, question)
-            try:
-                answer = q().answer(snapshot="candidate", reference_snapshot="current")
-            except TypeError:
-                answer = q(differential=True).answer()
-            frame = answer.frame()
-        except Exception as exc:
-            raise AdapterUnavailable(self.name, question, str(exc)) from exc
-        if frame is None:
-            return []
-        try:
-            return frame.to_dict(orient="records")  # type: ignore[no-any-return]
-        except Exception:
-            return []
+    def _gate_checks(self, session: Any, snapshot: str) -> tuple[list[str], dict[str, Any]]:
+        """Undefined references, duplicate IPs and BGP sessions on one snapshot."""
+        failures: list[str] = []
+        evidence: dict[str, Any] = {}
+        for label in ("undefined_references", "duplicate_ips", "bgp_session_status"):
+            rows = self._question_rows(
+                session,
+                BATFISH_QUESTIONS[label],
+                snapshot=snapshot,
+                params=_GATE_KWARGS.get(label),
+            )
+            evidence[label] = {"rows": len(rows)}
+            if label == "undefined_references" and rows:
+                failures.append(f"undefined references: {len(rows)}")
+                evidence[label]["sample"] = rows[:3]
+            if label == "duplicate_ips" and rows:
+                # ipOwners(duplicatesOnly=True): every row is a duplicate IP.
+                failures.append(f"duplicate IPs: {len(rows)}")
+                evidence[label]["sample"] = rows[:3]
+            if label == "bgp_session_status":
+                down = _bgp_down(rows)
+                if down:
+                    failures.append(f"BGP sessions down: {len(down)}")
+                    evidence[label]["sample"] = down[:3]
+        return failures, evidence
 
     @staticmethod
     def _acl_impact(
@@ -284,8 +297,9 @@ class BatfishAdapter(BaseAdapter):
     ) -> BatfishResult:
         """Compare current vs candidate snapshots in the SAME Batfish session.
 
-        Both snapshots are loaded (current, then candidate) and each question
-        is answered differentially against them. Without a current snapshot
+        Both snapshots are loaded (current, then candidate). The gating checks
+        run on the candidate; reachability and routes are answered
+        differentially (candidate vs reference=current). Without a current snapshot
         there is nothing to compare against, so fall back to a single-snapshot
         analyse() of the candidate and say so in the differential dict.
         """
@@ -314,33 +328,23 @@ class BatfishAdapter(BaseAdapter):
                 session.init_snapshot(str(candidate_dir), name="candidate", overwrite=True)
             except Exception as exc:
                 raise AdapterUnavailable(self.name, "init_snapshot", str(exc)) from exc
-            failures: list[str] = []
-            evidence: dict[str, Any] = {}
-            reachability_rows: list[dict[str, Any]] = []
-            for label, question in _DIFFERENTIAL_QUESTIONS.items():
-                rows = self._differential_rows(session, question)
-                evidence[label] = {"rows": len(rows)}
-                if label == "reachability":
-                    reachability_rows = rows
-                if label == "undefined_references" and rows:
-                    failures.append(f"undefined references: {len(rows)}")
-                    evidence[label]["sample"] = rows[:3]
-                if label == "duplicate_ips":
-                    dups = [
-                        r
-                        for r in rows
-                        if any(isinstance(v, (list, tuple)) and len(v) > 1 for v in r.values())
-                    ]
-                    if dups:
-                        failures.append(f"duplicate IPs: {len(dups)}")
-                if label == "bgp_session_status":
-                    down = [
-                        r
-                        for r in rows
-                        if "down" in str(r).lower() or "not_established" in str(r).lower()
-                    ]
-                    if down:
-                        failures.append(f"BGP sessions down: {len(down)}")
+            # Health checks on the candidate itself, then differential
+            # reachability: answer(snapshot=candidate, reference_snapshot=current).
+            failures, evidence = self._gate_checks(session, "candidate")
+            reachability_rows = self._question_rows(
+                session,
+                DIFFERENTIAL_REACHABILITY,
+                snapshot="candidate",
+                reference_snapshot="current",
+            )
+            evidence["reachability"] = {"rows": len(reachability_rows)}
+            route_rows = self._question_rows(
+                session,
+                BATFISH_QUESTIONS["routes"],
+                snapshot="candidate",
+                reference_snapshot="current",
+            )
+            evidence["routes"] = {"rows": len(route_rows)}
             reachability = _classify(reachability_rows)
             if cast(int, reachability["lost"]) > 0:
                 failures.append(f"reachability lost: {reachability['lost']} flow(s)")

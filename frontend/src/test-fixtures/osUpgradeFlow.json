@@ -1,0 +1,223 @@
+{
+ "name": "OS upgrade from an ITSM ticket (boot image via change pipeline)",
+ "description": "A ticket whose summary is 'OS UPGRADE <device> to <version>' reaches Implement: check the current version, ask for approval on P1/P2, set the boot image through the full change pipeline (locks, backup, dry-run, checks, Git rollback), verify, and close the ticket \u2014 or report the failure on the ticket.",
+ "trigger": {
+  "type": "itsm",
+  "events": [
+   "created",
+   "updated",
+   "state_changed"
+  ],
+  "states": [
+   "Implement"
+  ],
+  "conditions": {
+   "all": [
+    {
+     "field": "ticket.summary",
+     "op": "matches",
+     "value": "OS UPGRADE (?P<device>[A-Za-z0-9._-]+) to (?P<version>\\d+\\.\\d+\\.\\d+)"
+    },
+    {
+     "field": "ticket.fields.category",
+     "op": "in",
+     "value": [
+      "network",
+      ""
+     ]
+    }
+   ]
+  }
+ },
+ "definition": {
+  "variables": {},
+  "steps": [
+   {
+    "id": "start_note",
+    "type": "itsm_comment",
+    "text": "VireoNet flow: OS upgrade of {{ trigger.match.device }} to {{ trigger.match.version }} started."
+   },
+   {
+    "id": "set_target",
+    "type": "set_variable",
+    "name": "target",
+    "value": "{{ trigger.match.version }}"
+   },
+   {
+    "id": "set_parts",
+    "type": "set_variable",
+    "name": "parts",
+    "value": "{{ vars.target.split('.') | map('int') | list }}"
+   },
+   {
+    "id": "set_image",
+    "type": "set_variable",
+    "name": "image",
+    "value": "flash:cat9k_iosxe.{{ '%02d' % vars.parts[0] }}.{{ '%02d' % vars.parts[1] }}.{{ '%02d' % vars.parts[2] }}.SPA.bin"
+   },
+   {
+    "id": "device",
+    "type": "get_device",
+    "device": "{{ trigger.match.device }}",
+    "save_as": "device"
+   },
+   {
+    "id": "pre",
+    "type": "run_commands",
+    "devices": [
+     "{{ trigger.match.device }}"
+    ],
+    "commands": [
+     "show version",
+     "show boot"
+    ],
+    "save_as": "pre"
+   },
+   {
+    "id": "set_current",
+    "type": "set_variable",
+    "name": "current",
+    "value": "{{ (vars.pre[trigger.match.device]['show version'] | regex_findall('Version ([0-9.]+), RELEASE'))[0] }}"
+   },
+   {
+    "id": "already",
+    "type": "if",
+    "branches": [
+     {
+      "condition": {
+       "field": "vars.current",
+       "op": "equals",
+       "value": "{{ vars.target }}"
+      },
+      "steps": [
+       {
+        "id": "close_noop",
+        "type": "itsm_close",
+        "note": "{{ trigger.match.device }} already runs {{ vars.target }}: nothing to do."
+       },
+       {
+        "id": "stop_noop",
+        "type": "stop",
+        "message": "already on the target version"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "needs_approval",
+    "type": "if",
+    "branches": [
+     {
+      "condition": {
+       "field": "trigger.ticket.fields.priority",
+       "op": "in",
+       "value": [
+        "1",
+        "2"
+       ]
+      },
+      "steps": [
+       {
+        "id": "approve",
+        "type": "approval",
+        "message": "Upgrade {{ trigger.match.device }} from {{ vars.current }} to {{ vars.target }} (P{{ trigger.ticket.fields.priority }})?",
+        "role": "approver",
+        "timeout_minutes": 60
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "upgrade",
+    "type": "try",
+    "steps": [
+     {
+      "id": "push_boot",
+      "type": "config_push",
+      "name": "Set boot image (full change pipeline)",
+      "ticket_number": "{{ trigger.ticket.key }}",
+      "automation": "full",
+      "window_minutes": 120,
+      "intent": {
+       "change_type": "config_push",
+       "devices": [
+        "{{ trigger.match.device }}"
+       ],
+       "site": "{{ vars.device.site }}",
+       "configs": {
+        "{{ trigger.match.device }}": "boot system {{ vars.image }}"
+       },
+       "rollback_configs": {
+        "{{ trigger.match.device }}": "{{ vars.pre[trigger.match.device]['show boot'] | regex_findall('BOOT variable = ([^,]+)') | map('regex_replace', '^', 'boot system ') | first }}"
+       }
+      },
+      "save_as": "change"
+     },
+     {
+      "id": "post",
+      "type": "run_commands",
+      "devices": [
+       "{{ trigger.match.device }}"
+      ],
+      "commands": [
+       "show boot"
+      ],
+      "save_as": "post",
+      "retry_count": 2,
+      "retry_delay_seconds": 10
+     },
+     {
+      "id": "verify",
+      "type": "if",
+      "branches": [
+       {
+        "condition": {
+         "field": "{{ vars.post[trigger.match.device]['show boot'] }}",
+         "op": "not_contains",
+         "value": "{{ vars.image }}"
+        },
+        "steps": [
+         {
+          "id": "boot_wrong",
+          "type": "fail",
+          "message": "boot variable is not {{ vars.image }} after the change"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "id": "close_ok",
+      "type": "itsm_close",
+      "note": "VireoNet: {{ trigger.match.device }} boot image set to {{ vars.image }} (change {{ vars.change.ticket_number }} closed). Reload in the maintenance window to activate {{ vars.target }}."
+     }
+    ],
+    "catch": [
+     {
+      "id": "fail_note",
+      "type": "itsm_comment",
+      "text": "VireoNet: OS upgrade of {{ trigger.match.device }} failed: {{ vars.error.message }}. The change pipeline rolled back automatically."
+     },
+     {
+      "id": "fail_notify",
+      "type": "notify",
+      "message": "OS upgrade of {{ trigger.match.device }} failed: {{ vars.error.message }}"
+     },
+     {
+      "id": "fail_run",
+      "type": "fail",
+      "message": "{{ vars.error.message }}"
+     }
+    ]
+   }
+  ],
+  "outputs": {
+   "device": "{{ trigger.match.device }}",
+   "from": "{{ vars.current }}",
+   "to": "{{ vars.target }}",
+   "image": "{{ vars.image }}"
+  }
+ }
+}

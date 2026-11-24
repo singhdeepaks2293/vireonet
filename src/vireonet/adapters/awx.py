@@ -64,11 +64,22 @@ class AwxAdapter(BaseAdapter):
     """Real AWX / Ansible Controller REST API v2. Token auth. No secrets in extra_vars."""
 
     def __init__(
-        self, config: AdapterConfig, *, token: str = "", correlation_id: str | None = None
+        self,
+        config: AdapterConfig,
+        *,
+        token: str = "",
+        api_prefix: str = "/api/v2",
+        correlation_id: str | None = None,
     ) -> None:
         super().__init__(config, correlation_id=correlation_id)
         self.token = token
+        # AWX: /api/v2. AAP 2.5+ platform gateway: /api/controller/v2.
+        self.api_prefix = "/" + (api_prefix or "/api/v2").strip("/")
         self._template_ids: dict[str, int] = {}
+
+    @property
+    def _p(self) -> str:
+        return self.api_prefix
 
     def capabilities(self) -> list[str]:
         return [
@@ -85,7 +96,7 @@ class AwxAdapter(BaseAdapter):
 
     async def health_check(self) -> AdapterHealth:
         try:
-            await self._request("GET", "/api/v2/ping/", idempotent=True)
+            await self._request("GET", f"{self._p}/ping/", idempotent=True)
             return AdapterHealth(name=self.name, status="ok", capabilities=self.capabilities())
         except Exception as exc:  # noqa: BLE001 — health must not raise
             return AdapterHealth(
@@ -145,7 +156,7 @@ class AwxAdapter(BaseAdapter):
         )
 
     async def template_exists(self, name: str) -> bool:
-        rows = await self._get_all("/api/v2/job_templates/", {"name": name})
+        rows = await self._get_all(f"{self._p}/job_templates/", {"name": name})
         if rows:
             self._template_ids[name] = int(rows[0]["id"])
         return bool(rows)
@@ -166,7 +177,7 @@ class AwxAdapter(BaseAdapter):
         if limit:
             body["limit"] = limit
         data = await self._request(
-            "POST", f"/api/v2/job_templates/{tid}/launch/", json_body=body, idempotent=False
+            "POST", f"{self._p}/job_templates/{tid}/launch/", json_body=body, idempotent=False
         )
         job_id = int(data.get("job", data.get("id", 0)))
         return (
@@ -177,12 +188,12 @@ class AwxAdapter(BaseAdapter):
 
     async def launch_workflow(self, template: str, extra_vars: dict[str, str]) -> AwxJob:
         _check_extra_vars(extra_vars)
-        rows = await self._get_all("/api/v2/workflow_job_templates/", {"name": template})
+        rows = await self._get_all(f"{self._p}/workflow_job_templates/", {"name": template})
         if not rows:
             raise AdapterNotFound(self.name, "launch_workflow", template)
         data = await self._request(
             "POST",
-            f"/api/v2/workflow_job_templates/{rows[0]['id']}/launch/",
+            f"{self._p}/workflow_job_templates/{rows[0]['id']}/launch/",
             json_body={"extra_vars": extra_vars},
             idempotent=False,
         )
@@ -194,7 +205,7 @@ class AwxAdapter(BaseAdapter):
         )
 
     async def get_job(self, job_id: int) -> AwxJob:
-        data = await self._request("GET", f"/api/v2/jobs/{job_id}/", idempotent=True)
+        data = await self._request("GET", f"{self._p}/jobs/{job_id}/", idempotent=True)
         return self._to_job(data)
 
     async def poll_job(
@@ -212,49 +223,99 @@ class AwxAdapter(BaseAdapter):
             await asyncio.sleep(interval_seconds)
 
     async def get_job_events(self, job_id: int) -> list[dict[str, Any]]:
-        return await self._get_all(f"/api/v2/jobs/{job_id}/job_events/")
+        return await self._get_all(f"{self._p}/jobs/{job_id}/job_events/")
 
     async def get_job_stdout(self, job_id: int) -> str:
         async with create_http_client(self.config, correlation_id=self.correlation_id) as client:
+            # Without ?format=txt the endpoint content-negotiates (JSON/HTML).
             resp = await client.get(
-                f"/api/v2/jobs/{job_id}/stdout/", headers={"Authorization": f"Bearer {self.token}"}
+                f"{self._p}/jobs/{job_id}/stdout/",
+                params={"format": "txt"},
+                headers={"Authorization": f"Bearer {self.token}"},
             )
             if resp.status_code >= 400:
                 raise _map_status(resp.status_code, self.name, "get_job_stdout", resp.text[:500])
             return resp.text
 
     async def cancel_job(self, job_id: int) -> AwxJob:
-        await self._request("POST", f"/api/v2/jobs/{job_id}/cancel/", json_body={}, idempotent=True)
+        await self._request(
+            "POST", f"{self._p}/jobs/{job_id}/cancel/", json_body={}, idempotent=True
+        )
         return await self.get_job(job_id)
 
     async def relaunch_job(self, job_id: int) -> AwxJob:
         data = await self._request(
-            "POST", f"/api/v2/jobs/{job_id}/relaunch/", json_body={}, idempotent=False
+            "POST", f"{self._p}/jobs/{job_id}/relaunch/", json_body={}, idempotent=False
         )
         return AwxJob(id=int(data.get("job", 0)), template="", status="pending")
 
     async def list_templates(self) -> list[str]:
-        return [str(r.get("name", "")) for r in await self._get_all("/api/v2/job_templates/")]
+        return [str(r.get("name", "")) for r in await self._get_all(f"{self._p}/job_templates/")]
 
     async def list_workflow_approval_nodes(self, workflow_job_id: int) -> list[dict[str, Any]]:
         return await self._get_all(
-            f"/api/v2/workflow_jobs/{workflow_job_id}/workflow_nodes/",
+            f"{self._p}/workflow_jobs/{workflow_job_id}/workflow_nodes/",
             {"job__type": "workflow_approval"},
         )
 
-    async def approve_workflow_node(self, node_id: int) -> None:
+    async def approve_workflow_node(self, node_id: int, *, resolve_node: bool = True) -> None:
+        """Approve a workflow approval.
+
+        ``/workflow_approvals/{id}/approve/`` takes the approval JOB id. If
+        ``node_id`` is a workflow job node, its approval job id is resolved
+        from ``summary_fields.job.id`` (a 404 on the node falls back to using
+        the id as the approval job id). ``resolve_node=False`` skips the lookup
+        when the caller already holds the approval job id.
+        """
+        approval_id = await self._resolve_approval_id(node_id) if resolve_node else node_id
         await self._request(
-            "POST", f"/api/v2/workflow_approvals/{node_id}/approve/", json_body={}, idempotent=True
+            "POST",
+            f"{self._p}/workflow_approvals/{approval_id}/approve/",
+            json_body={},
+            idempotent=True,
         )
 
+    async def _resolve_approval_id(self, node_id: int) -> int:
+        try:
+            node = await self._request(
+                "GET", f"{self._p}/workflow_job_nodes/{node_id}/", idempotent=True
+            )
+        except AdapterNotFound:
+            return node_id  # not a node id: treat as the approval job id
+        job = (node.get("summary_fields") or {}).get("job") or {}
+        if job.get("id") is None:
+            job_id = node.get("job")
+            if job_id is None:
+                raise AdapterNotFound(
+                    self.name, "approve_workflow_node", f"node {node_id} has no approval job yet"
+                )
+            return int(job_id)
+        if job.get("type") not in (None, "workflow_approval"):
+            raise AdapterValidationError(
+                self.name, "approve_workflow_node", f"node {node_id} is not an approval node"
+            )
+        return int(job["id"])
+
     async def sync_inventory(self, inventory_id: int) -> int:
+        """Update every source of an inventory; returns the first inventory_update id.
+
+        POST /inventories/{id}/update_inventory_sources/ returns a list of
+        ``{inventory_update, inventory_source, status}``.
+        """
         data = await self._request(
-            "POST", f"/api/v2/inventories/{inventory_id}/update/", json_body={}, idempotent=False
+            "POST",
+            f"{self._p}/inventories/{inventory_id}/update_inventory_sources/",
+            json_body={},
+            idempotent=False,
         )
-        return int(data.get("inventory_update", 0))
+        rows = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+        for row in rows:
+            if isinstance(row, dict) and row.get("inventory_update"):
+                return int(row["inventory_update"])
+        return 0
 
     async def sync_project(self, project_id: int) -> int:
         data = await self._request(
-            "POST", f"/api/v2/projects/{project_id}/update/", json_body={}, idempotent=False
+            "POST", f"{self._p}/projects/{project_id}/update/", json_body={}, idempotent=False
         )
         return int(data.get("project_update", 0))

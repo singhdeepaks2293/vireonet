@@ -14,12 +14,28 @@ from vireonet.adapters.errors import (
     AdapterValidationError,
 )
 
+_LNMS_MAINT = "librenms-maintenance-"
+_LNMS_DISABLED = "librenms-disabled-"
+
 
 class MonitoringAdapter(BaseAdapter):
     """Monitoring, behind a flag. Backend: none | alertmanager | librenms.
 
-    Alertmanager: silences via /api/v2/silences. LibreNMS: device enable/disable
-    via /api/v0/devices/:hostname — UNCERTAIN, the exact field varies by version.
+    Alertmanager: silences via /api/v2/silences.
+
+    LibreNMS (https://docs.librenms.org/API/Devices/):
+    - enable/disable: PATCH /api/v0/devices/:hostname with
+      {"field": "disabled", "data": 1|0} (update_device_field).
+    - silence: POST /api/v0/devices/:hostname/maintenance (maintenance_device)
+      with title, notes and duration "H:i". ``start`` is omitted so LibreNMS
+      uses its own now() (avoids server timezone mismatch); ``behavior`` (an
+      id) is omitted so alert.scheduled_maintenance_default_behavior applies.
+      LibreNMS releases without that endpoint (404) fall back to disabling
+      the device for the window.
+    - unsilence: the API has no call to end device maintenance, so the
+      maintenance simply expires after its duration. A fallback "disabled"
+      silence is undone by re-enabling the device.
+
     With backend=none every method is a no-op returning a sentinel, so the
     workflow does not branch on the backend.
     """
@@ -106,13 +122,24 @@ class MonitoringAdapter(BaseAdapter):
             data = await self._request("POST", "/api/v2/silences", json_body=body, idempotent=False)
             return str(data.get("silenceID", data.get("id", "")))
         if self.backend == "librenms":
-            # LibreNMS maintenance / alert suppression is version-specific.
-            # This uses the documented device-update endpoint; verify the field
-            # name on your LibreNMS version before relying on it.
-            await self._request(
-                "PATCH", f"/api/v0/devices/{device}", json_body={"disabled": 1}, idempotent=True
-            )
-            return f"librenms-disabled-{device}"
+            hours, mins = divmod(max(int(duration_minutes), 1), 60)
+            body = {
+                "title": f"vireonet change window {device}",
+                "notes": f"Change window for {device} (vireonet)",
+                "duration": f"{hours:02d}:{mins:02d}",
+            }
+            try:
+                await self._request(
+                    "POST",
+                    f"/api/v0/devices/{device}/maintenance",
+                    json_body=body,
+                    idempotent=False,
+                )
+            except AdapterNotFound:
+                # Older LibreNMS without maintenance_device: disable instead.
+                await self._set_librenms_disabled(device, True)
+                return f"{_LNMS_DISABLED}{device}"
+            return f"{_LNMS_MAINT}{device}"
         raise AdapterValidationError(self.name, "silence", f"unknown backend {self.backend}")
 
     async def unsilence(self, silence_id: str) -> None:
@@ -120,14 +147,23 @@ class MonitoringAdapter(BaseAdapter):
             return
         if self.backend == "alertmanager":
             await self._request("DELETE", f"/api/v2/silence/{silence_id}", idempotent=True)
+        elif self.backend == "librenms" and silence_id.startswith(_LNMS_DISABLED):
+            await self._set_librenms_disabled(silence_id.removeprefix(_LNMS_DISABLED), False)
+        # librenms maintenance: no API to end it; it expires after its duration.
+
+    async def _set_librenms_disabled(self, device: str, disabled: bool) -> None:
+        await self._request(
+            "PATCH",
+            f"/api/v0/devices/{device}",
+            json_body={"field": "disabled", "data": 1 if disabled else 0},
+            idempotent=True,
+        )
 
     async def enable_monitoring(self, device: str) -> bool:
         if self.backend == "none":
             return True
         if self.backend == "librenms":
-            await self._request(
-                "PATCH", f"/api/v0/devices/{device}", json_body={"disabled": 0}, idempotent=True
-            )
+            await self._set_librenms_disabled(device, False)
             return True
         # Alertmanager: monitoring is enabled by Prometheus discovery; there is
         # nothing to enable per device. Unsilencing (in close/rollback) is the action.
@@ -137,8 +173,6 @@ class MonitoringAdapter(BaseAdapter):
         if self.backend == "none":
             return True
         if self.backend == "librenms":
-            await self._request(
-                "PATCH", f"/api/v0/devices/{device}", json_body={"disabled": 1}, idempotent=True
-            )
+            await self._set_librenms_disabled(device, True)
             return True
         return True

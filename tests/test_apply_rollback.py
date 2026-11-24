@@ -64,11 +64,17 @@ async def test_apply_dry_run_then_waves_succeeds(tmp_path) -> None:
 
 async def test_post_check_failure_triggers_rollback_activity(tmp_path) -> None:
     acts, change_id, engine = await _activities(tmp_path)
+    # Pre-check takes the backups that rollback restores from.
+    pre = await acts.pre_check_change(CheckInput(change_id=change_id, intent=INTENT, kind="pre"))
+    assert pre["ok"], pre
+    backups = pre["evidence"]["backups"]
     # VLAN 200 is not in NetBox, so ConfigMatchesIntent post-check fails.
-    post = await acts.post_check_change(CheckInput(change_id=change_id, intent=INTENT, kind="post"))
+    post = await acts.post_check_change(
+        CheckInput(change_id=change_id, intent=INTENT, kind="post", backups=backups)
+    )
     assert not post["ok"]
     rb = await acts.rollback_change(
-        RollbackInput(change_id=change_id, intent=INTENT, evidence=post)
+        RollbackInput(change_id=change_id, intent=INTENT, evidence=post, backups=backups)
     )
     assert rb["ok"]  # Fake AWX rollback succeeds
     await engine.dispose()

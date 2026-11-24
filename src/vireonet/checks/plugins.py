@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from vireonet.checks.base import Check, CheckContext, CheckResult
 from vireonet.intent import ChangeIntent
+
+if TYPE_CHECKING:
+    from vireonet.checks.templates import CheckTemplates
 
 
 class ReachabilityCheck:
@@ -134,17 +139,18 @@ class NoUnexpectedDiffCheck:
         )
 
 
-def pre_checks_for(intent: ChangeIntent) -> list[Check]:
-    base: list[Check] = [ReachabilityCheck(), NoActiveLockCheck(), InterfaceStateCheck()]
-    # Backup + baseline are added by activities after those jobs run; the
-    # engine re-runs the full list then. Declaring them here keeps one list.
-    return base + [BackupTakenCheck(), NeighbourBaselineCheck()]
+def pre_checks_for(intent: ChangeIntent, templates: CheckTemplates | None = None) -> list[Check]:
+    """Pre-checks for this intent, from the check templates (policies/checks.yaml).
+
+    Without templates this is the built-in default list, the same for every
+    change type. Locks and backups are taken by the activity regardless.
+    """
+    from vireonet.checks.templates import CheckTemplates
+
+    return (templates or CheckTemplates.default()).checks_for(intent, "pre")
 
 
-def post_checks_for(intent: ChangeIntent) -> list[Check]:
-    return [
-        ReachabilityCheck(),
-        ConfigMatchesIntentCheck(),
-        NoUnexpectedDiffCheck(),
-        NeighbourBaselineCheck(),
-    ]
+def post_checks_for(intent: ChangeIntent, templates: CheckTemplates | None = None) -> list[Check]:
+    from vireonet.checks.templates import CheckTemplates
+
+    return (templates or CheckTemplates.default()).checks_for(intent, "post")

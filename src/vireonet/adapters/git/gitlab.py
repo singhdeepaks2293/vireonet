@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from vireonet.adapters.base import AdapterConfig, AdapterHealth
+from vireonet.adapters.errors import AdapterNotFound
 from vireonet.adapters.git.base import (
     GitBaseAdapter,
+    GitCommit,
     GitCommitResult,
     GitFile,
     GitMR,
@@ -48,6 +50,22 @@ class GitLabAdapter(GitBaseAdapter):
         content = base64.b64decode(data["content"]).decode()
         return GitFile(path=path, content=content, sha=str(data.get("blob_id", "")))
 
+    async def list_commits(self, path: str, ref: str, limit: int = 20) -> list[GitCommit]:
+        data = await self._get(
+            f"/projects/{self.project}/repository/commits"
+            f"?ref_name={ref}&path={path}&per_page={limit}",
+            headers=self._headers(),
+        )
+        return [
+            GitCommit(
+                sha=str(c.get("id", "")),
+                message=str(c.get("message", "")),
+                author=str(c.get("author_name", "")),
+                date=str(c.get("committed_date", "")),
+            )
+            for c in (data or [])[:limit]
+        ]
+
     async def create_branch(self, branch: str, from_ref: str) -> str:
         await self._post(
             f"/projects/{self.project}/repository/branches",
@@ -59,12 +77,19 @@ class GitLabAdapter(GitBaseAdapter):
     async def commit_file(
         self, branch: str, path: str, content: str, message: str
     ) -> GitCommitResult:
+        # Commits API: "update" fails if the file is missing and "create" fails
+        # if it exists, so check existence on the branch first (404 -> create).
+        try:
+            await self.get_file(path, branch)
+            action = "update"
+        except AdapterNotFound:
+            action = "create"
         data = await self._post(
             f"/projects/{self.project}/repository/commits",
             json={
                 "branch": branch,
                 "commit_message": message,
-                "actions": [{"action": "update", "file_path": path, "content": content}],
+                "actions": [{"action": action, "file_path": path, "content": content}],
             },
             headers=self._headers(),
         )
@@ -138,8 +163,18 @@ class GitLabAdapter(GitBaseAdapter):
         )
 
     async def get_mr_diff(self, mr_id: int) -> str:
-        data = await self._get(
-            f"/projects/{self.project}/merge_requests/{mr_id}/changes", headers=self._headers()
-        )
-        diffs = data.get("changes", []) if isinstance(data, dict) else []
-        return "\n".join(str(d.get("diff", "")) for d in diffs)
+        # /merge_requests/:iid/changes is deprecated; /diffs returns a (paginated)
+        # list of {diff, old_path, new_path, ...}.
+        parts: list[str] = []
+        page = 1
+        while True:
+            data = await self._get(
+                f"/projects/{self.project}/merge_requests/{mr_id}/diffs?page={page}&per_page=100",
+                headers=self._headers(),
+            )
+            rows = data if isinstance(data, list) else []
+            parts.extend(str(d.get("diff", "")) for d in rows)
+            if len(rows) < 100:
+                break
+            page += 1
+        return "\n".join(parts)

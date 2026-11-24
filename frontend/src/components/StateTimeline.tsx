@@ -3,7 +3,7 @@ import type { ChangeState } from "../lib/tokens";
 const HAPPY = ["received", "validated", "planned", "ci_passed", "approved", "pre_checked", "applied", "post_checked", "closed"];
 
 export function StateTimeline({ state }: { state: ChangeState }) {
-  const isTerminalFailure = ["rejected", "ci_failed", "pre_check_failed", "rolled_back", "failed"].includes(state);
+  const isTerminalFailure = ["rejected", "ci_failed", "pre_check_failed", "rolled_back", "rollback_failed", "failed"].includes(state);
   const idx = HAPPY.indexOf(state);
   return (
     <ol className="flex flex-wrap gap-0 mb-4" aria-label="Change state timeline">

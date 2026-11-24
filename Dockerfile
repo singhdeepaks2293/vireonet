@@ -4,6 +4,7 @@ COPY pyproject.toml README.md alembic.ini ./
 COPY src/ ./src/
 COPY alembic/ ./alembic/
 COPY policies/ ./policies/
+COPY docs/ ./docs/
 COPY scripts/ ./scripts/
 RUN pip install --no-cache-dir -e .
 ENV PYTHONPATH=/app/src

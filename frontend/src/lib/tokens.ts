@@ -2,22 +2,30 @@
  *  Values live in tokens.css. Do not add colour or size literals here. */
 export const TOKENS = [
   "bg", "surface", "surface-muted", "border", "text", "text-muted",
-  "accent", "accent-foreground",
+  "accent", "accent-foreground", "highlight", "highlight-soft",
   "success", "success-bg", "warning", "warning-bg", "danger", "danger-bg", "info", "info-bg",
 ] as const;
 export type TokenName = (typeof TOKENS)[number];
 
 export const CHANGE_STATES = [
   "received", "validated", "planned", "ci_passed", "approved", "pre_checked",
-  "applied", "post_checked", "closed",
-  "rejected", "ci_failed", "pre_check_failed", "rolled_back", "failed",
+  "applied", "post_checked", "reconciling", "reconciliation_pending", "reconciled", "closed",
+  "rejected", "ci_failed", "pre_check_failed", "rolled_back", "rollback_failed", "failed",
 ] as const;
 export type ChangeState = (typeof CHANGE_STATES)[number];
+
+/** States the workflow can still move out of. The UI keeps polling these. */
+export const TERMINAL_STATES: readonly string[] = [
+  "closed", "rejected", "ci_failed", "pre_check_failed", "rolled_back", "rollback_failed", "failed",
+];
+export function isTerminal(state: string): boolean {
+  return TERMINAL_STATES.includes(state);
+}
 
 /** Status colour is only for state badges and check results, never decoration. */
 export function statusToken(state: ChangeState): "success" | "warning" | "danger" | "info" | "muted" {
   if (state === "closed" || state === "post_checked" || state === "applied") return "success";
-  if (state === "rejected" || state === "ci_failed" || state === "pre_check_failed" || state === "failed") return "danger";
+  if (state === "rejected" || state === "ci_failed" || state === "pre_check_failed" || state === "rollback_failed" || state === "failed") return "danger";
   if (state === "rolled_back") return "warning";
   return "info";
 }

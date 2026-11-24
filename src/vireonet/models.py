@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -61,6 +62,160 @@ class DeviceConfigVersion(Base):
     ticket_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source: Mapped[str] = mapped_column(String(64), nullable=False, default="awx-backup")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ExcelWorkbook(Base):
+    """An Excel config-push workbook: the original as received, and the
+    updated copy with pre-change running configs in its "backup" sheet."""
+
+    __tablename__ = "excel_workbooks"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ticket_number: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="original")
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="upload")
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Flow(Base):
+    """A stored workflow (flow): trigger + steps. Every save is a new version;
+    triggers run the published version."""
+
+    __tablename__ = "flows"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    trigger_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="manual", index=True
+    )
+    latest_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    published_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    webhook_token_hash: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class FlowVersion(Base):
+    __tablename__ = "flow_versions"
+    __table_args__ = (UniqueConstraint("flow_id", "version", name="uq_flow_versions_flow_version"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    flow_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("flows.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    trigger: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    definition: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FlowRun(Base):
+    __tablename__ = "flow_runs"
+    __table_args__ = (UniqueConstraint("flow_id", "dedup_key", name="uq_flow_runs_dedup"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    flow_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("flows.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_run_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    trigger_type: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    trigger_event: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    inputs: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    # NULL for runs that must never be de-duplicated (manual, schedule).
+    dedup_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued", index=True)
+    log: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
+    variables: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    outputs: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    waiting: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    started_by: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AdapterOverride(Base):
+    """An adapter setting saved from the UI (overrides the environment at start).
+    Secret values are stored encrypted ({"enc": …}); others as {"v": …}."""
+
+    __tablename__ = "adapter_overrides"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    secret: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_by: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PrePostProfile(Base):
+    """A saved Pre/Post check profile (commands, tests, diff rules)."""
+
+    __tablename__ = "prepost_profiles"
+
+    name: Mapped[str] = mapped_column(String(80), primary_key=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    definition: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_by: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PrePostSnapshot(Base):
+    """Command outputs (raw + TextFSM rows) of a profile on devices at one moment."""
+
+    __tablename__ = "prepost_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    profile: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    profile_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    label: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="adhoc"
+    )  # pre | post | adhoc
+    ticket: Mapped[str] = mapped_column(String(64), nullable=False, default="", index=True)
+    devices: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
+    data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    results: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DemoState(Base):
+    """Fake/demo-mode state shared by the API and the worker (e.g. the fake
+    ITSM's ticket comments and status). Never used with real adapters."""
+
+    __tablename__ = "demo_state"
+
+    namespace: Mapped[str] = mapped_column(String(32), primary_key=True)
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class ChangeDiff(Base):

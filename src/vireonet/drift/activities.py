@@ -8,7 +8,7 @@ activities. Activities do the I/O; workflows only orchestrate.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -93,7 +93,9 @@ class DriftActivities:
         collector: DriftCollector | None = None,
         detector: DetectionEngine | None = None,
         attribution: AttributionProvider | None = None,
+        emit: Callable[[dict[str, Any]], Awaitable[Any]] | None = None,
     ) -> None:
+        self._emit = emit
         self._sessions = session_factory
         self._netbox = netbox
         self._engine = engine
@@ -226,6 +228,20 @@ class DriftActivities:
             )
             record_drift_record(finding.severity, finding.kind)
             stored.append(str(record_id))
+            if self._emit is not None:  # flow trigger "VireoNet event: drift.detected"
+                await self._emit(
+                    {
+                        "source": "vireonet",
+                        "event": "drift.detected",
+                        "drift": {
+                            "id": str(record_id),
+                            "device": inp.device,
+                            "kind": finding.kind,
+                            "severity": finding.severity,
+                            "actor": actor,
+                        },
+                    }
+                )
         return {"stored": stored, "linked": linked, "updated": updated}
 
 

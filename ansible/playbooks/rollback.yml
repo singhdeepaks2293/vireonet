@@ -1,27 +1,123 @@
 ---
+# Roll back a change.
+# Source (set by VireoNet):
+#   restore_config + rollback_source=git: the device's config from the
+#     main/master commit recorded at pre-check (git_ref), i.e. the last commit
+#     before this change. Preferred: Git is the version-control source of truth.
+#   restore_lines + rollback_source=excel: the requester's own Rollback config
+#     from the Excel workbook's "backup" sheet. Pushed (merged) like an apply,
+#     not a full replace; works on every platform apply.yml supports.
+#   otherwise: the AWX pre-change backup file.
+# Full-config replace is used where the vendor module supports it safely.
+# Platforms without a safe automatic restore FAIL this job on purpose, so the
+# change ends in rollback_failed (manual action) instead of a false success.
 - name: Roll back from pre-change backup
   hosts: all
   gather_facts: false
   vars:
     backup_dir: "/var/lib/awx/backups/{{ ticket | default('unknown') }}"
+    backup_file: "{{ backup_dir }}/{{ inventory_hostname }}.cfg"
+    git_file: "/tmp/vireonet/{{ ticket | default('unknown') }}/{{ inventory_hostname }}.git-{{ git_ref | default('none') }}.cfg"
+    from_git: "{{ restore_config is defined and (restore_config | trim | length > 0) }}"
+    restore_file: "{{ git_file if from_git | bool else backup_file }}"
+    lines_file: "/tmp/vireonet/{{ ticket | default('unknown') }}/{{ inventory_hostname }}.rollback-lines.cfg"
+    from_lines: "{{ restore_lines is defined and (restore_lines | trim | length > 0) }}"
+    module_platforms: [ios, ios-xe, nxos, eos, junos, exos]
+    plat: "{{ platform | default('ios') }}"
+    auto_restore: [ios, ios-xe, nxos, eos, junos]
   tasks:
-    - name: Read backup file (controller)
-      ansible.builtin.slurp:
-        src: "{{ backup_dir }}/{{ inventory_hostname }}.cfg"
+    # --- Excel rollback config: push the requester's undo lines --------------
+    - name: Write the rollback lines (controller)
+      ansible.builtin.copy:
+        content: "{{ restore_lines }}"
+        dest: "{{ lines_file }}"
+        mode: "0640"
       delegate_to: localhost
-      register: backup
-      changed_when: false
+      when: from_lines | bool
 
-    - name: Restore running config (IOS)
+    - name: Push rollback lines (Cisco IOS / IOS-XE)
+      cisco.ios.ios_config: {src: "{{ lines_file }}", save_when: modified}
+      when: from_lines | bool and plat in ['ios', 'ios-xe']
+
+    - name: Push rollback lines (Cisco NX-OS)
+      cisco.nxos.nxos_config: {src: "{{ lines_file }}", save_when: modified}
+      when: from_lines | bool and plat == 'nxos'
+
+    - name: Push rollback lines (Arista EOS)
+      arista.eos.eos_config: {src: "{{ lines_file }}", save_when: modified}
+      when: from_lines | bool and plat == 'eos'
+
+    - name: Push rollback lines (Juniper Junos)
+      junipernetworks.junos.junos_config: {src: "{{ lines_file }}", src_format: set, comment: "vireonet rollback {{ ticket | default('') }}"}
+      when: from_lines | bool and plat == 'junos'
+
+    - name: Push rollback lines (Extreme EXOS)
+      community.network.exos_config: {src: "{{ lines_file }}", save_when: modified}
+      when: from_lines | bool and plat == 'exos'
+
+    - name: Push rollback lines (other platforms via cli_config)
+      ansible.netcommon.cli_config:
+        config: "{{ restore_lines }}"
+        commit: "{{ plat in ['sros', 'srlinux', 'panos'] }}"
+      when: from_lines | bool and plat not in module_platforms
+
+    - name: Rollback lines pushed; skip the full-config restore
+      ansible.builtin.meta: end_host
+      when: from_lines | bool
+
+    # --- Full-config restore (Git version or AWX backup) ---------------------
+    - name: Write the Git version to restore (controller)
+      ansible.builtin.copy:
+        content: "{{ restore_config }}"
+        dest: "{{ git_file }}"
+        mode: "0640"
+      delegate_to: localhost
+      when: from_git | bool
+
+    - name: Backup must exist (controller)
+      ansible.builtin.stat:
+        path: "{{ restore_file }}"
+      delegate_to: localhost
+      register: backup_stat
+
+    - name: Refuse to roll back without a backup
+      ansible.builtin.assert:
+        that: backup_stat.stat.exists
+        fail_msg: "nothing to restore at {{ restore_file }}; manual action needed"
+
+    - name: Restore (Cisco IOS / IOS-XE, replace)
       cisco.ios.ios_config:
-        src: "{{ backup_dir }}/{{ inventory_hostname }}.cfg"
+        src: "{{ restore_file }}"
         replace: config
         save_when: modified
-      when: ansible_network_os == 'cisco.ios.ios'
+      when: plat in ['ios', 'ios-xe']
 
-    - name: Restore running config (NX-OS)
+    - name: Restore (Cisco NX-OS, replace)
       cisco.nxos.nxos_config:
-        src: "{{ backup_dir }}/{{ inventory_hostname }}.cfg"
+        src: "{{ restore_file }}"
         replace: config
         save_when: modified
-      when: ansible_network_os == 'cisco.nxos.nxos'
+      when: plat == 'nxos'
+
+    - name: Restore (Arista EOS, replace)
+      arista.eos.eos_config:
+        src: "{{ restore_file }}"
+        replace: config
+        save_when: modified
+      when: plat == 'eos'
+
+    - name: Restore (Juniper Junos, override with the saved config)
+      junipernetworks.junos.junos_config:
+        src: "{{ restore_file }}"
+        src_format: text
+        update: override
+        comment: "vireonet rollback {{ ticket | default('') }}"
+      when: plat == 'junos'
+
+    - name: No safe automatic restore for this platform
+      ansible.builtin.fail:
+        msg: >-
+          automatic rollback is not supported for {{ plat }}; restore
+          {{ restore_file }} on {{ inventory_hostname }} manually
+          (VireoNet marks the change rollback_failed and keeps the device locked)
+      when: plat not in auto_restore

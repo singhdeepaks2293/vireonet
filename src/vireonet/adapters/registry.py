@@ -117,7 +117,11 @@ def build_adapters(settings: Settings) -> dict[str, BaseAdapter]:
         out["netbox"] = NetBoxAdapter(
             cfg("netbox", settings.netbox_base_url), token=settings.netbox_token
         )
-        out["awx"] = AwxAdapter(cfg("awx", settings.awx_base_url), token=settings.awx_token)
+        out["awx"] = AwxAdapter(
+            cfg("awx", settings.awx_base_url),
+            token=settings.awx_token,
+            api_prefix=settings.awx_api_prefix,
+        )
         out["vault"] = VaultAdapter(
             cfg("vault", settings.vault_addr),
             addr=settings.vault_addr,
